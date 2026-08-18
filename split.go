@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	progressbar "github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
 )
@@ -137,17 +136,13 @@ func opName(f any) string {
 }
 
 func SplitStream(ctx context.Context, fname string) error {
-	duration, err := getDuration(ctx, fname)
-	if err != nil {
-		return fmt.Errorf("get duration of %s: %w", fname, err)
-	}
 
 	silences, err := detectSilence(ctx, fname)
 	if err != nil {
 		return fmt.Errorf("detect silence in %s: %w", fname, err)
 	}
 
-	boundaries := chooseSplitBoundaries(silences, duration)
+	boundaries := chooseSplitBoundaries(silences)
 
 	f, err := os.Create(fmt.Sprintf("cutoffs_%s.txt", strings.TrimSuffix(filepath.Base(fname), filepath.Ext(fname))))
 	if err != nil {
@@ -171,7 +166,7 @@ func SplitStream(ctx context.Context, fname string) error {
 		// boundariesSlice = append(boundariesSlice, b)
 
 		g.Go(func() error {
-			err = splitAtBoundaries(ctx, fname, b, i, duration)
+			err = splitAtBoundaries(ctx, fname, b, i)
 			if err != nil {
 				slog.ErrorContext(ctx, "Boundary failed split", "err", err)
 			}
@@ -249,42 +244,17 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 	return silences, nil
 }
 
-func getDuration(ctx context.Context, inputPath string) (float64, error) {
-	cmd := exec.CommandContext(
-		ctx,
-		"ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		inputPath,
-	)
-
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe: %w", err)
-	}
-
-	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse duration %q: %w", output, err)
-	}
-
-	return duration, nil
-}
-
 // chooseSplitBoundaries turns every detected silence into a boundary. A
 // boundary is only made on a silence, so a clip never ends or begins while
 // the audio is still playing: the previous clip ends at the end of the
 // silence and the next clip begins at the start of that same silence.
-func chooseSplitBoundaries(silences chan silence, duration float64) chan boundary {
+func chooseSplitBoundaries(silences chan silence) chan boundary {
 	boundaries := make(chan boundary)
 	lastSilence := <-silences
 	first := true
 	go func() {
 		defer close(boundaries)
-		bar := progressbar.Default(int64(duration))
-		bar.RenderBlank()
-		bar.Set(int(lastSilence.End))
+
 		for silence := range silences {
 			if !first && silence.End-lastSilence.Start < 3 {
 				// lastSilence = silence
@@ -296,15 +266,13 @@ func chooseSplitBoundaries(silences chan silence, duration float64) chan boundar
 			}
 			boundaries <- boundary{Start: lastSilence.Start, End: silence.End}
 			lastSilence = silence
-			bar.Set(int(lastSilence.End))
 		}
-		bar.Close()
 	}()
 
 	return boundaries
 }
 
-func splitAtBoundaries(ctx context.Context, inputPath string, b boundary, i int, duration float64) error {
+func splitAtBoundaries(ctx context.Context, inputPath string, b boundary, i int) error {
 	if err := writeSegment(ctx, inputPath, b.Start, b.End, i); err != nil {
 		return fmt.Errorf("segment %d: %w", i, err)
 	}
