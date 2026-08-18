@@ -21,6 +21,7 @@ import (
 	"time"
 
 	progressbar "github.com/schollz/progressbar/v3"
+	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
 )
 
@@ -136,7 +137,7 @@ func opName(f any) string {
 }
 
 func SplitStream(ctx context.Context, fname string) error {
-	duration, err := Memoize(ctx, fname, getDuration)
+	duration, err := getDuration(ctx, fname)
 	if err != nil {
 		return fmt.Errorf("get duration of %s: %w", fname, err)
 	}
@@ -156,7 +157,9 @@ func SplitStream(ctx context.Context, fname string) error {
 	w := csv.NewWriter(f)
 	w.Comma = '\t'
 	i := 0
-	var boundariesSlice []boundary
+
+	g := errgroup.Group{}
+	g.SetLimit(4)
 	for b := range boundaries {
 		err = w.Write([]string{fmt.Sprintf("%.5f", b.Start), fmt.Sprintf("%.5f", b.End), fmt.Sprintf("Audio %d(%s)", i, time.Second*time.Duration(b.End-b.Start))})
 		if err != nil {
@@ -165,25 +168,22 @@ func SplitStream(ctx context.Context, fname string) error {
 		i++
 		w.Flush()
 		// slog.InfoContext(ctx, "Got boundary", "fname", fname, "id", i, "length_in_seconds", b.End-b.Start)
-		boundariesSlice = append(boundariesSlice, b)
+		// boundariesSlice = append(boundariesSlice, b)
+
+		g.Go(func() error {
+			err = splitAtBoundaries(ctx, fname, b, i, duration)
+			if err != nil {
+				slog.ErrorContext(ctx, "Boundary failed split", "err", err)
+			}
+			return nil
+		})
 	}
 	err = f.Close()
 	if err != nil {
 		return fmt.Errorf("close cutoffs file: %w", err)
 	}
 
-	bar := progressbar.Default(int64(duration), "Splitting files")
-	for i, b := range boundariesSlice {
-		bar.Set(int(b.Start))
-		err = splitAtBoundaries(ctx, fname, b, i, duration)
-		if err != nil {
-			slog.ErrorContext(ctx, "Boundary failed split", "err", err)
-		}
-		bar.Set(int(b.End))
-		break
-	}
-	bar.Close()
-	return nil
+	return g.Wait()
 }
 
 func detectSilence(ctx context.Context, inputPath string) (chan silence, error) {
@@ -313,19 +313,23 @@ func splitAtBoundaries(ctx context.Context, inputPath string, b boundary, i int,
 }
 
 func writeSegment(ctx context.Context, inputPath string, start, end float64, index int) error {
-	outputPath := fmt.Sprintf("output_%03d.mp3", index)
+	outputDir := strings.Split(filepath.Base(inputPath), ".")[0]
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create output dir %s: %w", outputDir, err)
+	}
 
+	outputPath := filepath.Join(".", outputDir, fmt.Sprintf("output_%05d.mp3", index))
 	cmd := exec.CommandContext(
 		ctx,
 		"ffmpeg",
 		"-hide_banner",
 		"-y",
 		"-ss", formatTime(start),
-		"-i", inputPath,
 		"-to", formatTime(end),
+		"-i", inputPath,
 		"-map", "0:a:0",
 		"-c:a", "libmp3lame",
-		"-b:a", "128k",
+		"-b:a", "196k",
 		outputPath,
 	)
 	cmd.Stdout = os.Stdout
