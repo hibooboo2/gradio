@@ -24,7 +24,14 @@ import (
 const (
 	streamURL  = "https://radio.gayphx.com/listen/gayphx/radio.mp3"
 	streamURL2 = "https://maxfm.ice.infomaniak.ch/maxfm-945.mp3"
+	PlayRadio  = "Slotex"
 )
+
+var urls = map[string]string{
+	// "GayPHXRadio": streamURL,
+	"RandomRadio": streamURL2,
+	"Slotex":      "https://s3.slotex.pl:7076/;",
+}
 
 var speakerOnce sync.Once
 
@@ -35,7 +42,7 @@ func main() {
 	file := flag.String("f", "", "file to auto split")
 	flag.Parse()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	defer cancel()
 
 	if *file != "" {
@@ -46,14 +53,19 @@ func main() {
 		return
 	}
 
-	rec := &Recorder{}
-
 	var wg errgroup.Group
 
-	wg.Go(func() error {
-		rec.Run(ctx)
-		return nil
-	})
+	for name, url := range urls {
+		rec := &Recorder{
+			url:       url,
+			radioName: name,
+		}
+
+		wg.Go(func() error {
+			rec.Run(ctx)
+			return nil
+		})
+	}
 
 	if *play {
 		wg.Go(func() error {
@@ -62,15 +74,6 @@ func main() {
 			return nil
 		})
 	}
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	<-sig
-
-	log.Println("shutdown requested")
-
-	cancel()
 
 	err := wg.Wait()
 	if err != nil {
@@ -81,9 +84,12 @@ func main() {
 }
 
 type Recorder struct {
-	mu      sync.Mutex
-	file    *os.File
-	started time.Time
+	mu        sync.Mutex
+	url       string
+	radioName string
+	file      *os.File
+	fullName  string
+	started   time.Time
 }
 
 func (r *Recorder) Run(ctx context.Context) {
@@ -96,7 +102,7 @@ func (r *Recorder) Run(ctx context.Context) {
 		default:
 		}
 
-		if err := r.recordOnce(ctx); err != nil {
+		if err := r.recordOnce(ctx, r.url, time.Minute*60); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -105,14 +111,16 @@ func (r *Recorder) Run(ctx context.Context) {
 
 			select {
 			case <-ctx.Done():
+
 				return
-			case <-time.After(5 * time.Second):
+			default:
+				continue
 			}
 		}
 	}
 }
 
-func (r *Recorder) recordOnce(ctx context.Context) error {
+func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime time.Duration) error {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -137,7 +145,16 @@ func (r *Recorder) recordOnce(ctx context.Context) error {
 
 	buf := make([]byte, 64*1024)
 
+	currentLoop := time.Now()
 	for {
+		if time.Since(currentLoop) > rotateTime {
+			err = r.rotate()
+			if err != nil {
+				return fmt.Errorf("failed to rotate file during recording")
+			}
+			currentLoop = time.Now()
+		}
+
 		n, err := resp.Body.Read(buf)
 
 		if n > 0 {
@@ -186,7 +203,7 @@ func (r *Recorder) rotate() error {
 		}
 	}
 
-	if err := os.MkdirAll("recordings", 0755); err != nil {
+	if err := os.MkdirAll("recordings/"+r.radioName, 0755); err != nil {
 		return err
 	}
 
@@ -194,8 +211,9 @@ func (r *Recorder) rotate() error {
 
 	filename := filepath.Join(
 		"recordings",
+		r.radioName,
 		fmt.Sprintf(
-			"gayphx-%s.mp3",
+			"gradio-%s.mp3",
 			now.Format("2006-01-02_15-04-05"),
 		),
 	)
@@ -205,10 +223,11 @@ func (r *Recorder) rotate() error {
 		return err
 	}
 
-	log.Printf("recording to %s", filename)
+	slog.Info("recording to", "filename", filename, "radio", r.radioName)
 
 	r.file = f
 	r.started = now
+	r.fullName = filename
 
 	return nil
 }
@@ -260,7 +279,7 @@ func playOnce(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		streamURL,
+		urls[PlayRadio],
 		nil,
 	)
 	if err != nil {
