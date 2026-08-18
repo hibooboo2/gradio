@@ -1,2 +1,4 @@
 recordings/
 *.mp3
+*.txt
+gradio

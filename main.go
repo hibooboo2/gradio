@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -33,10 +32,19 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	play := flag.Bool("play", false, "play audio while recording")
+	file := flag.String("f", "", "file to auto split")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if *file != "" {
+		err := SplitStream(ctx, *file)
+		if err != nil {
+			slog.ErrorContext(ctx, "Split stream failed", "err", err)
+		}
+		return
+	}
 
 	rec := &Recorder{}
 
@@ -121,10 +129,6 @@ func (r *Recorder) recordOnce(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	var buff bytes.Buffer
-	body := io.TeeReader(resp.Body, &buff)
-	go SplitStream(&buff)
-
 	log.Printf("recording connected (%s)", resp.Status)
 
 	if err := r.rotate(); err != nil {
@@ -134,7 +138,7 @@ func (r *Recorder) recordOnce(ctx context.Context) error {
 	buf := make([]byte, 64*1024)
 
 	for {
-		n, err := body.Read(buf)
+		n, err := resp.Body.Read(buf)
 
 		if n > 0 {
 			if _, werr := r.write(buf[:n]); werr != nil {
