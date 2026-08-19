@@ -63,6 +63,11 @@ type Split struct {
 	Classification string
 }
 
+// Duration returns the length of the split in seconds.
+func (s Split) Duration() float64 {
+	return s.End - s.Start
+}
+
 func CreateDBHandle() *sql.DB {
 	recordDBOnce.Do(func() {
 		dsn := recordDBPath

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -48,6 +49,11 @@ func routes() *http.ServeMux {
 	mux.HandleFunc("GET /splits/{id}", handleGetSplit)
 	mux.HandleFunc("PATCH /splits/{id}", handleUpdateSplit)
 	mux.HandleFunc("GET /recordings", handleListRecordings)
+
+	mux.HandleFunc("GET /splits/view", handleSplitsView)
+
+	// Serve the htmx web app from the web/ directory.
+	mux.Handle("/", http.FileServer(http.Dir("web")))
 
 	return mux
 }
@@ -150,4 +156,51 @@ func handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, recordings)
+}
+
+// splitsViewTemplate renders the htmx fragment listing all splits.
+var splitsViewTemplate = template.Must(template.New("splits").Parse(`<table>
+	<thead>
+		<tr>
+			<th>ID</th>
+			<th>Recording</th>
+			<th>#</th>
+			<th>Start</th>
+			<th>End</th>
+			<th>Duration</th>
+			<th>Classification</th>
+			<th>Output</th>
+		</tr>
+	</thead>
+	<tbody>
+		{{range .}}
+		<tr>
+			<td>{{.ID}}</td>
+			<td>{{.SourcePath}}</td>
+			<td>{{.Index}}</td>
+			<td>{{printf "%.1f" .Start}}</td>
+			<td>{{printf "%.1f" .End}}</td>
+			<td>{{printf "%.1f" .Duration}}</td>
+			<td>{{.Classification}}</td>
+			<td>{{.OutputPath}}</td>
+		</tr>
+		{{else}}
+		<tr><td colspan="8">No splits found.</td></tr>
+		{{end}}
+	</tbody>
+</table>`))
+
+// handleSplitsView renders an htmx-friendly HTML fragment listing all splits.
+func handleSplitsView(w http.ResponseWriter, r *http.Request) {
+	splits, err := fetchAllSplits()
+	if err != nil {
+		slog.ErrorContext(r.Context(), "list splits view", "err", err)
+		http.Error(w, "failed to load splits", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := splitsViewTemplate.Execute(w, splits); err != nil {
+		slog.ErrorContext(r.Context(), "render splits view", "err", err)
+	}
 }
