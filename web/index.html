@@ -597,7 +597,7 @@
 			function updateUI() {
 				queue.forEach((t, i) => t.el.classList.toggle('active', i === index));
 				const playing = !audio.paused && !audio.ended;
-				if (toggleBtn) toggleBtn.textContent = playing ? '&#10074;&#10074;' : '&#9654;';
+				if (toggleBtn) toggleBtn.textContent = playing ? '⏸️' : '▶️';
 				if (eq) eq.classList.toggle('playing', playing);
 			}
 
@@ -677,7 +677,7 @@
 				const order = ['off', 'all', 'one'];
 				repeat = order[(order.indexOf(repeat) + 1) % order.length];
 				repeatBtn.classList.toggle('active', repeat !== 'off');
-				repeatBtn.textContent = repeat === 'one' ? '&#128258;' : '&#128257;';
+				repeatBtn.textContent = repeat === 'one' ? '🔂' : '🔁';
 			});
 			if (bar) bar.addEventListener('click', (e) => {
 				if (!audio.duration) return;
@@ -694,7 +694,7 @@
 			}
 			if (muteBtn) muteBtn.addEventListener('click', () => {
 				audio.muted = !audio.muted;
-				muteBtn.textContent = audio.muted ? '&#128263;' : '&#128266;';
+				muteBtn.textContent = audio.muted ? '🔇' : '🔊';
 			});
 			queue.forEach((t, i) => t.el.addEventListener('click', () => playAt(i)));
 

@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	glog "github.com/hibooboo2/gradio/log"
+
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
@@ -37,6 +39,8 @@ var urls = map[string]string{
 var speakerOnce sync.Once
 
 func main() {
+	glog.Init()
+
 	CreateDBHandle()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)

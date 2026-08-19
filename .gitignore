@@ -3,3 +3,4 @@ recordings/
 *.txt
 gradio
 recordings.db*
+tmp/

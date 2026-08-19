@@ -340,15 +340,15 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 		</div>
 
 		<div class="transport">
-			<button type="button" class="icon-btn" data-player-shuffle title="Shuffle">&#8644;</button>
-			<button type="button" class="icon-btn" data-player-prev title="Previous">&#9198;</button>
-			<button type="button" class="play-btn" data-player-toggle title="Play/Pause">&#9654;</button>
-			<button type="button" class="icon-btn" data-player-next title="Next">&#9197;</button>
-			<button type="button" class="icon-btn" data-player-repeat title="Repeat">&#128257;</button>
+			<button type="button" class="icon-btn" data-player-shuffle title="Shuffle">&#128256;</button>
+			<button type="button" class="icon-btn" data-player-prev title="Previous">&#9198;&#65039;</button>
+			<button type="button" class="play-btn" data-player-toggle title="Play/Pause">&#9654;&#65039;</button>
+			<button type="button" class="icon-btn" data-player-next title="Next">&#9197;&#65039;</button>
+			<button type="button" class="icon-btn" data-player-repeat title="Repeat">&#128257;&#65039;</button>
 		</div>
 
 		<div class="volume-row">
-			<button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;</button>
+			<button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>
 			<input type="range" data-player-volume min="0" max="1" step="0.01">
 		</div>
 	</section>
