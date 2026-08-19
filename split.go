@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
-	_ "modernc.org/sqlite"
 )
 
 // silence is an interval of silence detected by ffmpeg's silencedetect filter.
@@ -55,16 +54,16 @@ var (
 
 func memoizeDBHandle() *sql.DB {
 	memoizeDBOnce.Do(func() {
-		db, err := sql.Open("sqlite", "file:/home/wizardofmath/go/src/github.com/hibooboo2/gradio/memoize.db?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
+		db, err := sql.Open("pgx", defaultDBPath)
 		if err != nil {
 			log.Fatalf("memoize: open db: %v", err)
 			return
 		}
 
 		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS memoize (
-			op     TEXT NOT NULL,
-			input  TEXT NOT NULL,
-			result TEXT NOT NULL,
+			op     STRING NOT NULL,
+			input  STRING NOT NULL,
+			result STRING NOT NULL,
 			PRIMARY KEY (op, input)
 		)`); err != nil {
 			log.Fatalf("memoize: create table: %v", err)
@@ -88,7 +87,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 	if memoizeDB != nil {
 		var data string
 		err := memoizeDB.QueryRow(
-			`SELECT result FROM memoize WHERE op = ? AND input = ?`,
+			`SELECT result FROM memoize WHERE op = $1 AND input = $2`,
 			opName(f), inputPath,
 		).Scan(&data)
 		switch {
@@ -118,7 +117,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 		}
 
 		if _, err := memoizeDB.Exec(
-			`INSERT INTO memoize (op, input, result) VALUES (?, ?, ?)
+			`INSERT INTO memoize (op, input, result) VALUES ($1, $2, $3)
 			 ON CONFLICT(op, input) DO UPDATE SET result = excluded.result`,
 			opName(f), inputPath, string(data),
 		); err != nil {
@@ -190,7 +189,7 @@ func splitRecording(ctx context.Context, rec Recording) error {
 		idx := i
 		i++
 		g.Go(func() error {
-			outputPath, err := writeSegment(ctx, rec.SourcePath, b.Start, b.End, idx)
+			outputPath, err := writeSegment(ctx, rec.Radio, rec.SourcePath, b.Start, b.End, idx)
 			if err != nil {
 				slog.ErrorContext(ctx, "Boundary failed split", "err", err)
 				return nil
@@ -305,8 +304,8 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 	return boundaries
 }
 
-func writeSegment(ctx context.Context, inputPath string, start, end float64, index int) (string, error) {
-	outputDir := strings.Split(filepath.Base(inputPath), ".")[0]
+func writeSegment(ctx context.Context, radio string, inputPath string, start, end float64, index int) (string, error) {
+	outputDir := filepath.Join("processed_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return "", fmt.Errorf("create output dir %s: %w", outputDir, err)
 	}

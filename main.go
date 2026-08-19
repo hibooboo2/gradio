@@ -36,6 +36,8 @@ var urls = map[string]string{
 var speakerOnce sync.Once
 
 func main() {
+	CreateDBHandle()
+
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	play := flag.Bool("play", false, "play audio while recording")

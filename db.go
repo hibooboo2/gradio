@@ -2,25 +2,30 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const dbPath = "file:recordings.db?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+// defaultDBPath is the insecure CockroachDB connection used by the docker
+// container started via `make run`. Override with the DATABASE_URL env var or
+// setRecordDBPath (used by tests).
+const defaultDBPath = "postgres://root@localhost:26257/defaultdb?sslmode=disable"
 
 var (
 	recordDB     *sql.DB
 	recordDBOnce sync.Once
-	recordDBPath = dbPath
+	recordDBPath = defaultDBPath
 )
 
-// setRecordDBPath overrides the sqlite database file used by the recordings
-// tables. It must be called before any DB access (used by tests).
+// setRecordDBPath overrides the database DSN used by the recordings tables. It
+// must be called before any DB access (used by tests).
 func setRecordDBPath(path string) {
-	recordDBPath = "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+	recordDBPath = path
 }
 
 // RecordingStatus tracks where a source recording is in the processing pipeline.
@@ -57,62 +62,76 @@ type Split struct {
 	OutputPath  string
 }
 
-func recordDBHandle() *sql.DB {
+func CreateDBHandle() *sql.DB {
 	recordDBOnce.Do(func() {
-		db, err := sql.Open("sqlite", recordDBPath)
+		dsn := recordDBPath
+		if env := os.Getenv("DATABASE_URL"); env != "" {
+			dsn = env
+		}
+
+		db, err := sql.Open("pgx", dsn)
 		if err != nil {
 			log.Fatalf("recordings: open db: %v", err)
 			return
 		}
 
-		// modernc.org/sqlite + database/sql does not tolerate multiple
-		// connections writing to the same file concurrently; serializing all
-		// access through a single connection avoids "database is locked"
-		// errors when the recorder and the split watcher write at the same
-		// time.
-		db.SetMaxOpenConns(1)
+		// CockroachDB handles concurrent writers fine, so unlike the old
+		// sqlite driver there is no need to serialize access to a single
+		// connection.
+		db.SetMaxOpenConns(10)
+		db.SetMaxIdleConns(5)
 
-		if _, err := db.Exec(`
-			CREATE TABLE IF NOT EXISTS recordings (
-				id          INTEGER PRIMARY KEY AUTOINCREMENT,
-				source_path TEXT    NOT NULL,
-				radio       TEXT    NOT NULL,
-				recorded_at TEXT    NOT NULL,
-				size_bytes  INTEGER NOT NULL,
-				status      TEXT    NOT NULL DEFAULT 'pending',
-				created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-			);
-			CREATE TABLE IF NOT EXISTS splits (
-				id            INTEGER PRIMARY KEY AUTOINCREMENT,
-				recording_id  INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
-				source_path   TEXT    NOT NULL,
-				position      INTEGER NOT NULL,
-				start_seconds REAL    NOT NULL,
-				end_seconds   REAL    NOT NULL,
-				output_path   TEXT    NOT NULL,
-				created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-			);
-			CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
-			CREATE INDEX IF NOT EXISTS idx_splits_recording ON splits(recording_id);
-		`); err != nil {
+		recordDB = db
+
+		if err := createSchema(db); err != nil {
 			log.Fatalf("recordings: create tables: %v", err)
 			return
 		}
-
-		recordDB = db
 	})
 
 	return recordDB
+}
+
+// createSchema ensures the recordings and splits tables (and their indexes)
+// exist. It is safe to call multiple times and is re-used by tests to reset a
+// clean schema after dropping tables.
+func createSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS recordings (
+			id          INT PRIMARY KEY DEFAULT unique_rowid(),
+			source_path STRING NOT NULL,
+			radio       STRING NOT NULL,
+			recorded_at STRING NOT NULL,
+			size_bytes  INT    NOT NULL,
+			status      STRING NOT NULL DEFAULT 'pending',
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE TABLE IF NOT EXISTS splits (
+			id            INT PRIMARY KEY DEFAULT unique_rowid(),
+			recording_id  INT    NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+			source_path   STRING NOT NULL,
+			position      INT    NOT NULL,
+			start_seconds DOUBLE PRECISION NOT NULL,
+			end_seconds   DOUBLE PRECISION NOT NULL,
+			output_path   STRING NOT NULL,
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
+		CREATE INDEX IF NOT EXISTS idx_splits_recording ON splits(recording_id);
+	`)
+	return err
 }
 
 // insertRecording records that a source file was produced and saved by the
 // recorder. It returns the recording id, or 0 if the file was already present
 // (same source path) so rotating/restarting does not create duplicates.
 func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes int64) (int64, error) {
-	db := recordDBHandle()
+	if recordDB == nil {
+		return 0, fmt.Errorf("nil db")
+	}
 
 	var existing int64
-	err := db.QueryRow(`SELECT id FROM recordings WHERE source_path = ?`, sourcePath).Scan(&existing)
+	err := recordDB.QueryRow(`SELECT id FROM recordings WHERE source_path = $1`, sourcePath).Scan(&existing)
 	switch {
 	case err == nil:
 		return 0, nil
@@ -120,27 +139,31 @@ func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes i
 		return 0, err
 	}
 
-	res, err := db.Exec(
+	var id int64
+	err = recordDB.QueryRow(
 		`INSERT INTO recordings (source_path, radio, recorded_at, size_bytes)
-		 VALUES (?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
 		sourcePath, radio, recordedAt.UTC().Format(time.RFC3339), sizeBytes,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
 
-	return res.LastInsertId()
+	return id, nil
 }
 
 // fetchPendingRecordings returns recordings that still need to be split,
 // oldest first.
 func fetchPendingRecordings() ([]Recording, error) {
-	db := recordDBHandle()
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
 
-	rows, err := db.Query(
+	rows, err := recordDB.Query(
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
-		 WHERE status = ? OR status = ?
+		 WHERE status = $1 OR status = $2
 		 ORDER BY recorded_at ASC`,
 		StatusPending, StatusError,
 	)
@@ -167,17 +190,23 @@ func fetchPendingRecordings() ([]Recording, error) {
 
 // setRecordingStatus updates the pipeline status of a source recording.
 func setRecordingStatus(id int64, status RecordingStatus) error {
-	db := recordDBHandle()
-	_, err := db.Exec(`UPDATE recordings SET status = ? WHERE id = ?`, status, id)
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(`UPDATE recordings SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
 
 // insertSplit stores one output file produced by splitting a source recording.
 func insertSplit(s Split) error {
-	db := recordDBHandle()
-	_, err := db.Exec(
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(
 		`INSERT INTO splits (recording_id, source_path, position, start_seconds, end_seconds, output_path)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath,
 	)
 	return err
@@ -187,12 +216,14 @@ func insertSplit(s Split) error {
 // their original stream order. Files are adjacent in the original stream when
 // their Index values are consecutive.
 func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
-	db := recordDBHandle()
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
 
-	rows, err := db.Query(
+	rows, err := recordDB.Query(
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path
 		 FROM splits
-		 WHERE recording_id = ?
+		 WHERE recording_id = $1
 		 ORDER BY position ASC`,
 		recordingID,
 	)

@@ -1,21 +1,34 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
+	"database/sql"
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	setRecordDBPath(filepath.Join(os.TempDir(), "gradio-test-recordings.db"))
-}
+const testDBPath = "postgres://root@localhost:26257/gradio_test?sslmode=disable"
 
 func TestRecordingDBLifecycle(t *testing.T) {
-	// Start from a clean database so the test is deterministic across runs.
-	os.Remove(filepath.Join(os.TempDir(), "gradio-test-recordings.db"))
+	// Ensure the dedicated test database exists (connect to the default db to
+	// create it, since CockroachDB won't create it implicitly).
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	// Point the package DB at the dedicated test database so we don't touch the
+	// real recordings, then start from a clean slate.
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	// Recreate the schema on the freshly-dropped tables.
+	require.NoError(t, createSchema(recordDB))
 
 	sourcePath := "/tmp/test-source-2026-08-18_00-00-00.mp3"
 	radio := "TestRadio"
