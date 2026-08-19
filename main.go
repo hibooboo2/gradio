@@ -55,6 +55,11 @@ func main() {
 
 	var wg errgroup.Group
 
+	wg.Go(func() error {
+		watchAndSplit(ctx)
+		return nil
+	})
+
 	for name, url := range urls {
 		rec := &Recorder{
 			url:       url,
@@ -90,6 +95,22 @@ type Recorder struct {
 	file      *os.File
 	fullName  string
 	started   time.Time
+}
+
+// recordFileToDB marks a just-saved recording file as available for splitting.
+// It is called with r.mu held whenever a file has been fully written and
+// closed (rotated out or shut down).
+func (r *Recorder) recordFileToDB(fullName string, started time.Time, size int64) {
+	if fullName == "" {
+		return
+	}
+
+	if _, err := insertRecording(fullName, r.radioName, started, size); err != nil {
+		log.Printf("record %s to db: %v", fullName, err)
+		return
+	}
+
+	slog.Info("recording saved to db", "filename", fullName, "radio", r.radioName)
 }
 
 func (r *Recorder) Run(ctx context.Context) {
@@ -201,6 +222,13 @@ func (r *Recorder) rotate() error {
 		if err := r.file.Close(); err != nil {
 			return err
 		}
+
+		info, err := os.Stat(r.fullName)
+		if err != nil {
+			log.Printf("stat closed recording %s: %v", r.fullName, err)
+		} else {
+			r.recordFileToDB(r.fullName, r.started, info.Size())
+		}
 	}
 
 	if err := os.MkdirAll("recordings/"+r.radioName, 0755); err != nil {
@@ -248,7 +276,71 @@ func (r *Recorder) Close() {
 		log.Printf("close error: %v", err)
 	}
 
+	info, err := os.Stat(r.fullName)
+	if err != nil {
+		log.Printf("stat closed recording %s: %v", r.fullName, err)
+	} else {
+		r.recordFileToDB(r.fullName, r.started, info.Size())
+	}
+
 	r.file = nil
+	r.fullName = ""
+}
+
+// watchAndSplit periodically polls the recordings table for files that were
+// saved by the recorder but have not yet been split. When it finds one it
+// marks it as processing, splits it, and records the resulting output files
+// and cutoffs.
+func watchAndSplit(ctx context.Context) {
+	ticker := time.NewTicker(time.Second * 30)
+	defer ticker.Stop()
+
+	// Check immediately on startup so files recorded in a previous run are
+	// picked up, then every tick thereafter.
+	for {
+		processPendingRecordings(ctx)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func processPendingRecordings(ctx context.Context) {
+	recs, err := fetchPendingRecordings()
+	if err != nil {
+		slog.ErrorContext(ctx, "fetch pending recordings", "err", err)
+		return
+	}
+
+	for _, rec := range recs {
+		if ctx.Err() != nil {
+			return
+		}
+
+		slog.InfoContext(ctx, "processing recording", "id", rec.ID, "source", rec.SourcePath, "radio", rec.Radio)
+
+		if err := setRecordingStatus(rec.ID, StatusProcessing); err != nil {
+			slog.ErrorContext(ctx, "mark recording processing", "err", err, "id", rec.ID)
+			continue
+		}
+
+		if err := splitRecording(ctx, rec); err != nil {
+			slog.ErrorContext(ctx, "split recording failed", "err", err, "id", rec.ID, "source", rec.SourcePath)
+			if serr := setRecordingStatus(rec.ID, StatusError); serr != nil {
+				slog.ErrorContext(ctx, "mark recording error", "err", serr, "id", rec.ID)
+			}
+			continue
+		}
+
+		if err := setRecordingStatus(rec.ID, StatusProcessed); err != nil {
+			slog.ErrorContext(ctx, "mark recording processed", "err", err, "id", rec.ID)
+		}
+
+		slog.InfoContext(ctx, "recording processed", "id", rec.ID, "source", rec.SourcePath)
+	}
 }
 
 func PlayStream(ctx context.Context) {

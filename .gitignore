@@ -2,3 +2,4 @@ recordings/
 *.mp3
 *.txt
 gradio
+recordings.db*

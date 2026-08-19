@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
@@ -136,46 +134,81 @@ func opName(f any) string {
 }
 
 func SplitStream(ctx context.Context, fname string) error {
-
-	silences, err := detectSilence(ctx, fname)
+	info, err := os.Stat(fname)
 	if err != nil {
-		return fmt.Errorf("detect silence in %s: %w", fname, err)
+		return err
+	}
+	radio := filepath.Base(filepath.Dir(fname))
+	if radio == "." || radio == "" {
+		radio = "manual"
+	}
+	id, err := insertRecording(fname, radio, info.ModTime(), info.Size())
+	if err != nil {
+		return err
+	}
+	rec := Recording{
+		ID:         id,
+		SourcePath: fname,
+		Radio:      radio,
+		RecordedAt: info.ModTime(),
+		SizeBytes:  info.Size(),
+		Status:     StatusProcessed,
+	}
+
+	err = setRecordingStatus(id, StatusProcessing)
+	if err != nil {
+		return fmt.Errorf("failed to set recording status: %w", err)
+	}
+
+	err = splitRecording(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("failed to split recording: %w", err)
+	}
+	err = setRecordingStatus(id, StatusProcessed)
+	if err != nil {
+		return fmt.Errorf("failed to store recording status: %w", err)
+	}
+	return nil
+}
+
+// splitRecording splits a single source recording and stores each resulting
+// output file, its cutoffs, and its position in the original stream, in the
+// splits table.
+func splitRecording(ctx context.Context, rec Recording) error {
+	silences, err := detectSilence(ctx, rec.SourcePath)
+	if err != nil {
+		return fmt.Errorf("detect silence in %s: %w", rec.SourcePath, err)
 	}
 
 	boundaries := chooseSplitBoundaries(silences)
 
-	f, err := os.Create(fmt.Sprintf("cutoffs_%s.txt", strings.TrimSuffix(filepath.Base(fname), filepath.Ext(fname))))
-	if err != nil {
-		return fmt.Errorf("create cutoffs file: %w", err)
-	}
-
-	w := csv.NewWriter(f)
-	w.Comma = '\t'
 	i := 0
 
 	g := errgroup.Group{}
-	g.SetLimit(4)
+	g.SetLimit(10)
 	for b := range boundaries {
-		err = w.Write([]string{fmt.Sprintf("%.5f", b.Start), fmt.Sprintf("%.5f", b.End), fmt.Sprintf("Audio %d(%s)", i, time.Second*time.Duration(b.End-b.Start))})
-		if err != nil {
-			return fmt.Errorf("write cutoffs file: %w", err)
-		}
+		idx := i
 		i++
-		w.Flush()
-		// slog.InfoContext(ctx, "Got boundary", "fname", fname, "id", i, "length_in_seconds", b.End-b.Start)
-		// boundariesSlice = append(boundariesSlice, b)
-
 		g.Go(func() error {
-			err = splitAtBoundaries(ctx, fname, b, i)
+			outputPath, err := writeSegment(ctx, rec.SourcePath, b.Start, b.End, idx)
 			if err != nil {
 				slog.ErrorContext(ctx, "Boundary failed split", "err", err)
+				return nil
+			}
+
+			err = insertSplit(Split{
+				RecordingID: rec.ID,
+				SourcePath:  rec.SourcePath,
+				Index:       idx,
+				Start:       b.Start,
+				End:         b.End,
+				OutputPath:  outputPath,
+			})
+			if err != nil {
+				slog.ErrorContext(ctx, "store split", "err", err, "output", outputPath)
 			}
 			return nil
 		})
-	}
-	err = f.Close()
-	if err != nil {
-		return fmt.Errorf("close cutoffs file: %w", err)
 	}
 
 	return g.Wait()
@@ -272,18 +305,10 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 	return boundaries
 }
 
-func splitAtBoundaries(ctx context.Context, inputPath string, b boundary, i int) error {
-	if err := writeSegment(ctx, inputPath, b.Start, b.End, i); err != nil {
-		return fmt.Errorf("segment %d: %w", i, err)
-	}
-
-	return nil
-}
-
-func writeSegment(ctx context.Context, inputPath string, start, end float64, index int) error {
+func writeSegment(ctx context.Context, inputPath string, start, end float64, index int) (string, error) {
 	outputDir := strings.Split(filepath.Base(inputPath), ".")[0]
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("create output dir %s: %w", outputDir, err)
+		return "", fmt.Errorf("create output dir %s: %w", outputDir, err)
 	}
 
 	outputPath := filepath.Join(".", outputDir, fmt.Sprintf("output_%05d.mp3", index))
@@ -303,10 +328,10 @@ func writeSegment(ctx context.Context, inputPath string, start, end float64, ind
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("create %s: %w", outputPath, err)
+		return "", fmt.Errorf("create %s: %w", outputPath, err)
 	}
 
-	return nil
+	return outputPath, nil
 }
 
 func formatTime(t float64) string {
