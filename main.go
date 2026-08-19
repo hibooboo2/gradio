@@ -46,8 +46,9 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	play := flag.Bool("play", false, "play audio while recording")
+	record := flag.Bool("record", false, "record radio stations")
 	file := flag.String("f", "", "file to auto split")
-	addr := flag.String("http", ":8081", "http listen address for the management API")
+	addr := flag.String("http", ":8000", "http listen address for the management API")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
@@ -93,17 +94,18 @@ func main() {
 		return nil
 	})
 
-	for name, url := range urls {
-		continue
-		rec := &Recorder{
-			url:       url,
-			radioName: name,
-		}
+	if *record {
+		for name, url := range urls {
+			rec := &Recorder{
+				url:       url,
+				radioName: name,
+			}
 
-		wg.Go(func() error {
-			rec.Run(ctx)
-			return nil
-		})
+			wg.Go(func() error {
+				rec.Run(ctx)
+				return nil
+			})
+		}
 	}
 
 	if *play {
