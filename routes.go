@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -51,6 +52,7 @@ func routes() *http.ServeMux {
 	mux.HandleFunc("GET /recordings", handleListRecordings)
 
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
+	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
 
 	// Serve the htmx web app from the web/ directory.
 	mux.Handle("/", http.FileServer(http.Dir("web")))
@@ -158,39 +160,73 @@ func handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, recordings)
 }
 
-// splitsViewTemplate renders the htmx fragment listing all splits.
-var splitsViewTemplate = template.Must(template.New("splits").Parse(`<table>
-	<thead>
-		<tr>
-			<th>ID</th>
-			<th>Recording</th>
-			<th>#</th>
-			<th>Start</th>
-			<th>End</th>
-			<th>Duration</th>
-			<th>Classification</th>
-			<th>Output</th>
-		</tr>
-	</thead>
-	<tbody>
-		{{range .}}
-		<tr>
-			<td>{{.ID}}</td>
-			<td>{{.SourcePath}}</td>
-			<td>{{.Index}}</td>
-			<td>{{printf "%.1f" .Start}}</td>
-			<td>{{printf "%.1f" .End}}</td>
-			<td>{{printf "%.1f" .Duration}}</td>
-			<td>{{.Classification}}</td>
-			<td>{{.OutputPath}}</td>
-		</tr>
-		{{else}}
-		<tr><td colspan="8">No splits found.</td></tr>
-		{{end}}
-	</tbody>
-</table>`))
+// splitsViewTemplate renders the htmx fragment listing all splits, grouped by
+// radio with a color-coded badge per radio.
+var splitsViewTemplate = template.Must(template.New("splits").Parse(`
+{{range .}}
+<section class="radio-group">
+	<h2>
+		<span class="radio-badge" style="background:{{.Color}}">{{.Radio}}</span>
+		<span class="count">{{len .Splits}} split{{if ne (len .Splits) 1}}s{{end}}</span>
+	</h2>
+	<table>
+		<thead>
+			<tr>
+				<th>ID</th>
+				<th>Recording</th>
+				<th>#</th>
+				<th>Start</th>
+				<th>End</th>
+				<th>Duration</th>
+				<th>Classification</th>
+				<th>Output</th>
+			</tr>
+		</thead>
+		<tbody>
+			{{range .Splits}}
+			<tr class="cls-{{.Classification}}">
+				<td>{{.ID}}</td>
+				<td>{{.SourcePath}}</td>
+				<td>{{.Index}}</td>
+				<td>{{printf "%.1f" .Start}}</td>
+				<td>{{printf "%.1f" .End}}</td>
+				<td>{{printf "%.1f" .Duration}}</td>
+				<td>{{.Classification}}</td>
+				<td>{{.OutputPath}}</td>
+			</tr>
+			{{else}}
+			<tr><td colspan="8">No splits in this radio.</td></tr>
+			{{end}}
+		</tbody>
+	</table>
+</section>
+{{else}}
+<p class="empty">No splits found.</p>
+{{end}}
+`))
 
-// handleSplitsView renders an htmx-friendly HTML fragment listing all splits.
+// radioGroup is a set of splits that share the same source radio, plus a
+// display color for that radio.
+type radioGroup struct {
+	Radio  string
+	Color  string
+	Splits []Split
+}
+
+// radioPalette assigns a stable color to each distinct radio.
+var radioPalette = []string{
+	"#6366f1", // indigo
+	"#ec4899", // pink
+	"#10b981", // emerald
+	"#f59e0b", // amber
+	"#06b6d4", // cyan
+	"#8b5cf6", // violet
+	"#ef4444", // red
+	"#14b8a6", // teal
+}
+
+// handleSplitsView renders an htmx-friendly HTML fragment listing all splits,
+// grouped by radio.
 func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	splits, err := fetchAllSplits()
 	if err != nil {
@@ -199,8 +235,51 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Group splits by radio, preserving first-seen order.
+	order := []string{}
+	byRadio := map[string][]Split{}
+	for _, s := range splits {
+		radio := radioFromPath(s.SourcePath)
+		if _, ok := byRadio[radio]; !ok {
+			order = append(order, radio)
+		}
+		byRadio[radio] = append(byRadio[radio], s)
+	}
+
+	colorOf := map[string]string{}
+	for i, radio := range order {
+		colorOf[radio] = radioPalette[i%len(radioPalette)]
+	}
+
+	groups := make([]radioGroup, 0, len(order))
+	for _, radio := range order {
+		groups = append(groups, radioGroup{
+			Radio:  radio,
+			Color:  colorOf[radio],
+			Splits: byRadio[radio],
+		})
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := splitsViewTemplate.Execute(w, splits); err != nil {
+	if err := splitsViewTemplate.Execute(w, groups); err != nil {
 		slog.ErrorContext(r.Context(), "render splits view", "err", err)
 	}
+}
+
+// handlePlaylistsView renders an htmx-friendly HTML fragment for the play
+// lists tab. Placeholder until play lists are implemented.
+func handlePlaylistsView(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(`<p class="empty">No play lists yet.</p>`))
+}
+
+// radioFromPath extracts the radio name from a source file path. Files are
+// stored as recordings/<radio>/<file>.mp3, or directly in recordings/ when no
+// radio directory is present.
+func radioFromPath(path string) string {
+	dir := filepath.Base(filepath.Dir(path))
+	if dir == "." || dir == "" || dir == "recordings" {
+		return "manual"
+	}
+	return dir
 }

@@ -190,13 +190,6 @@ func SplitStream(ctx context.Context, fname string) error {
 // output file, its cutoffs, and its position in the original stream, in the
 // splits table.
 func splitRecording(ctx context.Context, rec Recording) error {
-	silences, err := detectSilence(ctx, rec.SourcePath)
-	if err != nil {
-		return fmt.Errorf("detect silence in %s: %w", rec.SourcePath, err)
-	}
-
-	boundaries := chooseSplitBoundaries(silences)
-
 	existing, err := fetchSplitsForRecording(rec.ID)
 	if err != nil {
 		return fmt.Errorf("fetch existing splits for recording %d: %w", rec.ID, err)
@@ -208,8 +201,18 @@ func splitRecording(ctx context.Context, rec Recording) error {
 
 	i := 0
 
+	wd, _ := os.Getwd()
+	rec.SourcePath = filepath.Join(wd, rec.SourcePath)
+
+	silences, err := detectSilence(ctx, rec.SourcePath)
+	if err != nil {
+		return fmt.Errorf("detect silence in %s: %w", rec.SourcePath, err)
+	}
+
+	boundaries := chooseSplitBoundaries(silences)
+
 	g := errgroup.Group{}
-	g.SetLimit(10)
+	g.SetLimit(100)
 	for b := range boundaries {
 		idx := i
 		i++
@@ -307,8 +310,10 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 		defer close(silences)
 
 		scanner := bufio.NewScanner(stderr)
+		var lastLine string
 		for scanner.Scan() {
 			line := scanner.Text()
+			lastLine = line
 			if m := silenceStartRE.FindStringSubmatch(line); m != nil {
 				start, err := strconv.ParseFloat(m[1], 64)
 				if err != nil {
@@ -333,7 +338,7 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 		}
 
 		if err := cmd.Wait(); err != nil {
-			slog.Error("silence detection errored", "err", err)
+			slog.Error("silence detection errored", "err", err, "lastLine", lastLine, "inputPath", inputPath)
 		}
 	}()
 

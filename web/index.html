@@ -6,40 +6,208 @@
 	<title>Gradio Splits</title>
 	<script src="/htmx.min.js"></script>
 	<style>
-		body {
-			font-family: system-ui, sans-serif;
-			margin: 2rem auto;
-			max-width: 1100px;
-			padding: 0 1rem;
-			color: #222;
+		:root {
+			--bg: #0f172a;
+			--panel: #1e293b;
+			--panel-2: #334155;
+			--text: #e2e8f0;
+			--muted: #94a3b8;
+			--accent: #6366f1;
+			--border: #334155;
+			--song: #10b981;
+			--not-song: #f59e0b;
 		}
-		h1 { font-size: 1.5rem; }
+
+		* { box-sizing: border-box; }
+
+		body {
+			font-family: system-ui, -apple-system, sans-serif;
+			margin: 0;
+			background: var(--bg);
+			color: var(--text);
+			line-height: 1.5;
+			display: flex;
+			min-height: 100vh;
+		}
+
+		h1 {
+			font-size: 1.75rem;
+			font-weight: 700;
+			margin: 0 0 0.25rem;
+			background: linear-gradient(90deg, #818cf8, #ec4899);
+			-webkit-background-clip: text;
+			background-clip: text;
+			color: transparent;
+		}
+
+		.subtitle {
+			color: var(--muted);
+			margin: 0 0 1.5rem;
+		}
+
+		.sidebar {
+			width: 220px;
+			flex-shrink: 0;
+			background: var(--panel);
+			border-right: 1px solid var(--border);
+			padding: 1.25rem 1rem;
+			position: sticky;
+			top: 0;
+			height: 100vh;
+		}
+
+		.sidebar h1 {
+			font-size: 1.5rem;
+			margin: 0 0 1.25rem;
+			padding: 0 0.5rem;
+		}
+
+		.sidebar nav {
+			display: flex;
+			flex-direction: column;
+			gap: 0.25rem;
+		}
+
+		.tab {
+			background: transparent;
+			color: var(--muted);
+			text-align: left;
+			padding: 0.6rem 1rem;
+			border-radius: 8px;
+			border: none;
+			font-size: 0.95rem;
+			font-weight: 600;
+			cursor: pointer;
+			width: 100%;
+			transition: background 0.15s ease, color 0.15s ease;
+		}
+		.tab:hover { background: var(--panel-2); color: var(--text); }
+		.tab.active { background: var(--accent); color: #fff; }
+
+		.main {
+			flex: 1;
+			min-width: 0;
+			padding: 2rem 1.5rem 4rem;
+		}
+
+		.controls { margin-bottom: 1.5rem; }
+
+		button {
+			background: var(--accent);
+			color: #fff;
+			border: none;
+			border-radius: 8px;
+			padding: 0.5rem 1.25rem;
+			font-size: 0.95rem;
+			font-weight: 600;
+			cursor: pointer;
+			transition: filter 0.15s ease;
+		}
+		button:hover { filter: brightness(1.15); }
+		button:disabled { opacity: 0.6; cursor: wait; }
+
+		.radio-group {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 12px;
+			margin-bottom: 1.5rem;
+			padding: 1rem 1.25rem;
+			overflow: hidden;
+		}
+
+		.radio-group h2 {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			margin: 0 0 0.75rem;
+			font-size: 1.1rem;
+			font-weight: 600;
+		}
+
+		.radio-badge {
+			color: #fff;
+			padding: 0.2rem 0.8rem;
+			border-radius: 999px;
+			font-size: 0.85rem;
+			font-weight: 700;
+			letter-spacing: 0.02em;
+		}
+
+		.count { color: var(--muted); font-weight: 500; font-size: 0.9rem; }
+
 		table {
 			width: 100%;
 			border-collapse: collapse;
-			font-size: 0.9rem;
+			font-size: 0.85rem;
+			color: var(--text);
 		}
 		th, td {
-			border: 1px solid #ddd;
-			padding: 0.4rem 0.6rem;
+			padding: 0.5rem 0.6rem;
 			text-align: left;
+			border-top: 1px solid var(--border);
 		}
-		th { background: #f4f4f4; }
-		tr:nth-child(even) { background: #fafafa; }
-		.controls { margin-bottom: 1rem; }
-		button {
-			padding: 0.4rem 0.9rem;
-			cursor: pointer;
+		th {
+			background: var(--panel-2);
+			color: var(--muted);
+			font-weight: 600;
+			position: sticky;
+			top: 0;
+		}
+		tbody tr:hover { background: rgba(99, 102, 241, 0.08); }
+
+		.cls-likely_song td:first-child {
+			border-left: 4px solid var(--song);
+		}
+		.cls-not_song td:first-child {
+			border-left: 4px solid var(--not-song);
+		}
+		.cls- td:first-child { border-left: 4px solid var(--border); }
+
+		td:last-child {
+			color: var(--muted);
+			font-family: ui-monospace, monospace;
+			font-size: 0.8rem;
+			word-break: break-all;
+		}
+
+		.empty {
+			color: var(--muted);
+			text-align: center;
+			padding: 2rem;
 		}
 	</style>
 </head>
 <body>
-	<h1>Splits</h1>
-	<div class="controls">
-		<button hx-get="/splits/view" hx-target="#splits" hx-swap="innerHTML">Refresh</button>
-	</div>
-	<div id="splits" hx-get="/splits/view" hx-trigger="load" hx-swap="innerHTML">
-		Loading splits…
-	</div>
+	<aside class="sidebar">
+		<h1>Gradio</h1>
+		<nav>
+			<button class="tab active" data-title="Splits" data-subtitle="Grouped by radio" data-controls="true"
+				hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML"
+				hx-on:click="setTab(this)">Splits</button>
+			<button class="tab" data-title="Play Lists" data-subtitle="Your saved play lists" data-controls="false"
+				hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML"
+				hx-on:click="setTab(this)">Play Lists</button>
+		</nav>
+	</aside>
+	<main class="main">
+		<h1 id="page-title">Splits</h1>
+		<p class="subtitle" id="page-subtitle">Grouped by radio</p>
+		<div id="controls" class="controls">
+			<button hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML"
+				hx-disabled-elt="this">Refresh</button>
+		</div>
+		<div id="content" hx-get="/splits/view" hx-trigger="load" hx-swap="innerHTML">
+			<p class="empty">Loading splits…</p>
+		</div>
+	</main>
+	<script>
+		function setTab(el) {
+			document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+			el.classList.add('active');
+			document.getElementById('page-title').textContent = el.dataset.title;
+			document.getElementById('page-subtitle').textContent = el.dataset.subtitle;
+			document.getElementById('controls').style.display = el.dataset.controls === 'true' ? '' : 'none';
+		}
+	</script>
 </body>
 </html>

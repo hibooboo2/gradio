@@ -76,10 +76,13 @@ func main() {
 				slog.Info("Non mp3", "ext", filepath.Ext(path))
 				return nil
 			}
-			err = SplitStream(ctx, path)
-			if err != nil {
-				slog.ErrorContext(ctx, "Failed to split stream", "err", err)
-			}
+			wg.Go(func() error {
+				err = SplitStream(ctx, path)
+				if err != nil {
+					slog.ErrorContext(ctx, "Failed to split stream", "err", err)
+				}
+				return nil
+			})
 			return nil
 		})
 		watchAndSplit(ctx)
