@@ -76,4 +76,34 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	require.Equal(t, 0, splits[0].Index)
 	require.InDelta(t, 42.696, splits[0].Start, 0.0001)
 	require.InDelta(t, 274.092, splits[0].End, 0.0001)
+	require.Empty(t, splits[0].Classification)
+
+	all, err := fetchAllSplits()
+	require.NoError(t, err)
+	require.NotEmpty(t, all)
+
+	fetched, err := fetchSplit(splits[0].ID)
+	require.NoError(t, err)
+	require.Equal(t, splits[0].ID, fetched.ID)
+
+	require.NoError(t, updateSplit(Split{
+		ID:             splits[0].ID,
+		RecordingID:    id,
+		SourcePath:     sourcePath,
+		Index:          0,
+		Start:          100.5,
+		End:            200.25,
+		OutputPath:     "/tmp/test-source/output_00001.mp3",
+		Classification: "track",
+	}))
+
+	updated, err := fetchSplit(splits[0].ID)
+	require.NoError(t, err)
+	require.InDelta(t, 100.5, updated.Start, 0.0001)
+	require.InDelta(t, 200.25, updated.End, 0.0001)
+	require.Equal(t, "track", updated.Classification)
+
+	recs, err := fetchAllRecordings()
+	require.NoError(t, err)
+	require.NotEmpty(t, recs)
 }

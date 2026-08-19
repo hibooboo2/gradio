@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,12 @@ type boundary struct {
 const (
 	silenceNoise    = "-17.8dB"
 	silenceDuration = "1.3"
+
+	// Classifications assigned to a split when it is first created. A split
+	// under a minute is unlikely to be a full song; anything at or over a
+	// minute is a probable song.
+	classificationNotSong    = "not_song"
+	classificationLikelySong = "likely_song"
 )
 
 var (
@@ -145,6 +152,15 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return err
 	}
+	if id == 0 {
+		// The recording already exists from a previous run; reuse its id so
+		// any new splits link to the original row instead of an orphan.
+		existing, err := fetchRecordingByPath(fname)
+		if err != nil {
+			return fmt.Errorf("fetch existing recording %s: %w", fname, err)
+		}
+		id = existing.ID
+	}
 	rec := Recording{
 		ID:         id,
 		SourcePath: fname,
@@ -181,6 +197,15 @@ func splitRecording(ctx context.Context, rec Recording) error {
 
 	boundaries := chooseSplitBoundaries(silences)
 
+	existing, err := fetchSplitsForRecording(rec.ID)
+	if err != nil {
+		return fmt.Errorf("fetch existing splits for recording %d: %w", rec.ID, err)
+	}
+	existingByIndex := make(map[int]Split, len(existing))
+	for _, s := range existing {
+		existingByIndex[s.Index] = s
+	}
+
 	i := 0
 
 	g := errgroup.Group{}
@@ -189,6 +214,44 @@ func splitRecording(ctx context.Context, rec Recording) error {
 		idx := i
 		i++
 		g.Go(func() error {
+			outputPath := splitOutputPath(rec.Radio, rec.SourcePath, idx)
+
+			if _, err := os.Stat(outputPath); err == nil {
+				expected := b.End - b.Start
+				actual, derr := fileDuration(outputPath)
+				if derr != nil {
+					slog.WarnContext(ctx, "measure existing split duration", "err", derr, "output", outputPath)
+				}
+				match := durationsMatch(expected, actual)
+
+				slog.InfoContext(ctx,
+					"skipping split, output file already exists",
+					"recording", rec.ID,
+					"index", idx,
+					"output", outputPath,
+					"existing_duration_seconds", actual,
+					"expected_duration_seconds", expected,
+					"duration_matches", match,
+				)
+
+				// The row may be missing if a previous run was interrupted
+				// between writing the file and storing the split.
+				if _, ok := existingByIndex[idx]; !ok {
+					if err := insertSplit(Split{
+						RecordingID:    rec.ID,
+						SourcePath:     rec.SourcePath,
+						Index:          idx,
+						Start:          b.Start,
+						End:            b.End,
+						OutputPath:     outputPath,
+						Classification: classifySplit(b.Start, b.End),
+					}); err != nil {
+						slog.ErrorContext(ctx, "store skipped split", "err", err, "output", outputPath)
+					}
+				}
+				return nil
+			}
+
 			outputPath, err := writeSegment(ctx, rec.Radio, rec.SourcePath, b.Start, b.End, idx)
 			if err != nil {
 				slog.ErrorContext(ctx, "Boundary failed split", "err", err)
@@ -196,12 +259,13 @@ func splitRecording(ctx context.Context, rec Recording) error {
 			}
 
 			err = insertSplit(Split{
-				RecordingID: rec.ID,
-				SourcePath:  rec.SourcePath,
-				Index:       idx,
-				Start:       b.Start,
-				End:         b.End,
-				OutputPath:  outputPath,
+				RecordingID:    rec.ID,
+				SourcePath:     rec.SourcePath,
+				Index:          idx,
+				Start:          b.Start,
+				End:            b.End,
+				OutputPath:     outputPath,
+				Classification: classifySplit(b.Start, b.End),
 			})
 			if err != nil {
 				slog.ErrorContext(ctx, "store split", "err", err, "output", outputPath)
@@ -304,13 +368,28 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 	return boundaries
 }
 
-func writeSegment(ctx context.Context, radio string, inputPath string, start, end float64, index int) (string, error) {
+// classifySplit assigns the initial classification for a newly created split
+// based on its duration in the original stream.
+func classifySplit(start, end float64) string {
+	if end-start < 60 {
+		return classificationNotSong
+	}
+	return classificationLikelySong
+}
+
+// splitOutputPath returns the deterministic path a split's output file will
+// be written to for a given source recording and stream position.
+func splitOutputPath(radio, inputPath string, index int) string {
 	outputDir := filepath.Join("split_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", fmt.Errorf("create output dir %s: %w", outputDir, err)
+	return filepath.Join(outputDir, fmt.Sprintf("output_%05d.mp3", index))
+}
+
+func writeSegment(ctx context.Context, radio string, inputPath string, start, end float64, index int) (string, error) {
+	outputPath := splitOutputPath(radio, inputPath, index)
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return "", fmt.Errorf("create output dir %s: %w", filepath.Dir(outputPath), err)
 	}
 
-	outputPath := filepath.Join(".", outputDir, fmt.Sprintf("output_%05d.mp3", index))
 	cmd := exec.CommandContext(
 		ctx,
 		"ffmpeg",
@@ -331,6 +410,38 @@ func writeSegment(ctx context.Context, radio string, inputPath string, start, en
 	}
 
 	return outputPath, nil
+}
+
+// fileDuration returns the length in seconds of an audio file using ffprobe.
+func fileDuration(path string) (float64, error) {
+	cmd := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe %s: %w", path, err)
+	}
+
+	d, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse duration %q: %w", out, err)
+	}
+
+	return d, nil
+}
+
+// durationsMatch reports whether the measured duration of an existing output
+// file is close enough to the duration of the split it represents (allowing
+// for encoder frame alignment).
+func durationsMatch(expected, actual float64) bool {
+	if actual <= 0 {
+		return false
+	}
+	return math.Abs(expected-actual) < 1.0
 }
 
 func formatTime(t float64) string {

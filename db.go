@@ -53,13 +53,14 @@ type Recording struct {
 // splitting a source recording, along with the boundary (cutoff) in the
 // original source stream and the position of the file within that stream.
 type Split struct {
-	ID          int64
-	RecordingID int64
-	SourcePath  string
-	Index       int
-	Start       float64
-	End         float64
-	OutputPath  string
+	ID             int64
+	RecordingID    int64
+	SourcePath     string
+	Index          int
+	Start          float64
+	End            float64
+	OutputPath     string
+	Classification string
 }
 
 func CreateDBHandle() *sql.DB {
@@ -114,6 +115,7 @@ func createSchema(db *sql.DB) error {
 			start_seconds DOUBLE PRECISION NOT NULL,
 			end_seconds   DOUBLE PRECISION NOT NULL,
 			output_path   STRING NOT NULL,
+			classification STRING NOT NULL DEFAULT '',
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
@@ -205,9 +207,9 @@ func insertSplit(s Split) error {
 	}
 
 	_, err := recordDB.Exec(
-		`INSERT INTO splits (recording_id, source_path, position, start_seconds, end_seconds, output_path)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath,
+		`INSERT INTO splits (recording_id, source_path, position, start_seconds, end_seconds, output_path, classification)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath, s.Classification,
 	)
 	return err
 }
@@ -221,7 +223,7 @@ func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path
+		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification
 		 FROM splits
 		 WHERE recording_id = $1
 		 ORDER BY position ASC`,
@@ -235,11 +237,131 @@ func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
 	}
 
 	return splits, rows.Err()
+}
+
+// fetchAllSplits returns every split, newest recording first, joined with the
+// radio name of the source recording for convenient display.
+func fetchAllSplits() ([]Split, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
+		 FROM splits s
+		 ORDER BY s.id DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var splits []Split
+	for rows.Next() {
+		var s Split
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
+			return nil, err
+		}
+		splits = append(splits, s)
+	}
+
+	return splits, rows.Err()
+}
+
+// fetchSplit returns a single split by id, or an error when it does not exist.
+func fetchSplit(id int64) (Split, error) {
+	if recordDB == nil {
+		return Split{}, fmt.Errorf("nil db")
+	}
+
+	var s Split
+	err := recordDB.QueryRow(
+		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification
+		 FROM splits
+		 WHERE id = $1`,
+		id,
+	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification)
+	if err != nil {
+		return Split{}, err
+	}
+
+	return s, nil
+}
+
+// updateSplit persists changes to a split's boundaries and classification.
+func updateSplit(s Split) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(
+		`UPDATE splits
+		 SET start_seconds = $1, end_seconds = $2, classification = $3
+		 WHERE id = $4`,
+		s.Start, s.End, s.Classification, s.ID,
+	)
+	return err
+}
+
+// fetchRecordingByPath returns the recording row for a source file.
+func fetchRecordingByPath(sourcePath string) (Recording, error) {
+	if recordDB == nil {
+		return Recording{}, fmt.Errorf("nil db")
+	}
+
+	var r Recording
+	var recordedAt string
+	err := recordDB.QueryRow(
+		`SELECT id, source_path, radio, recorded_at, size_bytes, status
+		 FROM recordings
+		 WHERE source_path = $1`,
+		sourcePath,
+	).Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status)
+	if err != nil {
+		return Recording{}, err
+	}
+	if t, err := time.Parse(time.RFC3339, recordedAt); err == nil {
+		r.RecordedAt = t
+	}
+
+	return r, nil
+}
+
+// fetchAllRecordings returns every recording, newest first.
+func fetchAllRecordings() ([]Recording, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT id, source_path, radio, recorded_at, size_bytes, status
+		 FROM recordings
+		 ORDER BY id DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recs []Recording
+	for rows.Next() {
+		var r Recording
+		var recordedAt string
+		if err := rows.Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339, recordedAt); err == nil {
+			r.RecordedAt = t
+		}
+		recs = append(recs, r)
+	}
+
+	return recs, rows.Err()
 }

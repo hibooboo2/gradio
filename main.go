@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -42,6 +43,7 @@ func main() {
 
 	play := flag.Bool("play", false, "play audio while recording")
 	file := flag.String("f", "", "file to auto split")
+	addr := flag.String("http", ":8081", "http listen address for the management API")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
@@ -58,11 +60,34 @@ func main() {
 	var wg errgroup.Group
 
 	wg.Go(func() error {
+		return serveAPI(ctx, *addr)
+	})
+
+	wg.Go(func() error {
+		filepath.WalkDir("recordings", func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				slog.Error("Walk dir error", "err", err)
+			}
+			slog.Info("Recordings walk", "path", path, "entry", d.Name(), "dir", d.IsDir())
+			if d.IsDir() {
+				return nil
+			}
+			if filepath.Ext(path) != ".mp3" {
+				slog.Info("Non mp3", "ext", filepath.Ext(path))
+				return nil
+			}
+			err = SplitStream(ctx, path)
+			if err != nil {
+				slog.ErrorContext(ctx, "Failed to split stream", "err", err)
+			}
+			return nil
+		})
 		watchAndSplit(ctx)
 		return nil
 	})
 
 	for name, url := range urls {
+		continue
 		rec := &Recorder{
 			url:       url,
 			radioName: name,
@@ -233,7 +258,7 @@ func (r *Recorder) rotate() error {
 		}
 	}
 
-	if err := os.MkdirAll("recordings/"+r.radioName, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join("recordings", r.radioName), 0755); err != nil {
 		return err
 	}
 
