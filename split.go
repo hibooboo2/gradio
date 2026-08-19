@@ -305,7 +305,7 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 }
 
 func writeSegment(ctx context.Context, radio string, inputPath string, start, end float64, index int) (string, error) {
-	outputDir := filepath.Join("processed_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
+	outputDir := filepath.Join("split_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return "", fmt.Errorf("create output dir %s: %w", outputDir, err)
 	}
