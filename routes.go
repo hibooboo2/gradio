@@ -37,12 +37,26 @@ func serveAPI(ctx context.Context, addr string) error {
 	}
 }
 
-// routes returns the HTTP handler for the management API.
+// routes returns the HTTP handler for the management API and web app.
 //
-//	GET    /splits            list all splits
-//	GET    /splits/{id}       get one split
-//	PATCH  /splits/{id}       update a split's start, end, and/or classification
-//	GET    /recordings        list all recordings
+//	GET    /splits                 list all splits
+//	GET    /splits/{id}            get one split
+//	PATCH  /splits/{id}            update a split's start, end, and/or classification
+//	GET    /recordings             list all recordings
+//	GET    /playlists              list playlists (JSON)
+//	GET    /playlists/{id}         get one playlist with its songs (JSON)
+//	GET    /api/songs              list all splits available as songs (JSON)
+//	GET    /music/{path...}        serve a split output file from split_music/
+//
+// The htmx web fragments are:
+//
+//	GET    /splits/view            splits tab fragment
+//	GET    /playlists/view         play lists tab fragment
+//	GET    /player/view            player tab fragment
+//	POST   /playlists/create       create a playlist (form: name)
+//	POST   /playlists/{id}/delete  delete a playlist
+//	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
+//	POST   /playlists/{id}/songs/{split_id}/delete  remove a split from a playlist
 func routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -53,6 +67,20 @@ func routes() *http.ServeMux {
 
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
 	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
+	mux.HandleFunc("GET /player/view", handlePlayerView)
+
+	mux.HandleFunc("POST /playlists/create", handleCreatePlaylist)
+	mux.HandleFunc("POST /playlists/{id}/delete", handleDeletePlaylist)
+	mux.HandleFunc("POST /playlists/{id}/songs", handleAddSong)
+	mux.HandleFunc("POST /playlists/{id}/songs/{split_id}/delete", handleRemoveSong)
+
+	// Simple JSON API backed directly by the cockroach tables.
+	mux.HandleFunc("GET /api/playlists", handleListPlaylistsJSON)
+	mux.HandleFunc("GET /api/playlists/{id}", handleGetPlaylistJSON)
+	mux.HandleFunc("GET /api/songs", handleListSongsJSON)
+
+	// Serve the mp3 output files from split_music/ for the player.
+	mux.HandleFunc("GET /music/{path...}", handleMusic)
 
 	// Serve the htmx web app from the web/ directory.
 	mux.Handle("/", http.FileServer(http.Dir("web")))
@@ -264,13 +292,6 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	if err := splitsViewTemplate.Execute(w, groups); err != nil {
 		slog.ErrorContext(r.Context(), "render splits view", "err", err)
 	}
-}
-
-// handlePlaylistsView renders an htmx-friendly HTML fragment for the play
-// lists tab. Placeholder until play lists are implemented.
-func handlePlaylistsView(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(`<p class="empty">No play lists yet.</p>`))
 }
 
 // radioFromPath extracts the radio name from a source file path. Files are

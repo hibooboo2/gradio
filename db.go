@@ -125,6 +125,21 @@ func createSchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 		CREATE INDEX IF NOT EXISTS idx_splits_recording ON splits(recording_id);
+
+		CREATE TABLE IF NOT EXISTS playlists (
+			id         INT PRIMARY KEY DEFAULT unique_rowid(),
+			name       STRING NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE TABLE IF NOT EXISTS playlist_splits (
+			id          INT PRIMARY KEY DEFAULT unique_rowid(),
+			playlist_id INT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+			split_id    INT NOT NULL REFERENCES splits(id) ON DELETE CASCADE,
+			position    INT NOT NULL,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE (playlist_id, split_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_playlist_splits_playlist ON playlist_splits(playlist_id);
 	`)
 	return err
 }

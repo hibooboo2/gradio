@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Gradio Splits</title>
+	<title>Gradio</title>
 	<script src="/htmx.min.js"></script>
 	<style>
 		:root {
@@ -13,6 +13,8 @@
 			--text: #e2e8f0;
 			--muted: #94a3b8;
 			--accent: #6366f1;
+			--accent-2: #10b981;
+			--danger: #ef4444;
 			--border: #334155;
 			--song: #10b981;
 			--not-song: #f59e0b;
@@ -106,6 +108,17 @@
 		button:hover { filter: brightness(1.15); }
 		button:disabled { opacity: 0.6; cursor: wait; }
 
+		input[type="text"], select {
+			background: var(--bg);
+			color: var(--text);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 0.5rem 0.75rem;
+			font-size: 0.95rem;
+			outline: none;
+		}
+		input[type="text"]:focus, select:focus { border-color: var(--accent); }
+
 		.radio-group {
 			background: var(--panel);
 			border: 1px solid var(--border);
@@ -175,18 +188,324 @@
 			text-align: center;
 			padding: 2rem;
 		}
+		.empty-sub { color: var(--muted); text-align: center; margin: -1rem 0 1.5rem; font-size: 0.9rem; }
+		.empty-icon { font-size: 3rem; color: var(--panel-2); text-align: center; margin: 0.5rem 0; }
+
+		.surface {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 12px;
+		}
+
+		/* ---------- Playlists tab ---------- */
+		.view-header {
+			display: flex;
+			align-items: baseline;
+			gap: 1rem;
+			margin-bottom: 1rem;
+		}
+		.view-header h2 { margin: 0; font-size: 1.4rem; }
+		.view-header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+		.create-form {
+			display: flex;
+			gap: 0.5rem;
+			margin-bottom: 1.25rem;
+		}
+		.create-form input { flex: 1; }
+
+		.playlist-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+
+		.playlist-item { padding: 0; overflow: hidden; }
+
+		.playlist-head {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			padding: 0.9rem 1.1rem;
+			cursor: pointer;
+			user-select: none;
+			transition: background 0.15s ease;
+		}
+		.playlist-head:hover { background: rgba(99, 102, 241, 0.08); }
+
+		.playlist-icon {
+			width: 2.5rem;
+			height: 2.5rem;
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 10px;
+			background: rgba(99, 102, 241, 0.15);
+			color: var(--accent);
+			font-size: 1.15rem;
+		}
+
+		.playlist-info { flex: 1; min-width: 0; }
+		.playlist-name { display: block; font-weight: 600; font-size: 0.95rem; }
+		.playlist-meta { color: var(--muted); font-size: 0.8rem; }
+
+		.playlist-chevron { color: var(--muted); font-size: 0.7rem; }
+
+		.playlist-detail {
+			border-top: 1px solid var(--border);
+			padding: 1rem 1.1rem;
+		}
+		.playlist-detail h3 {
+			margin: 1rem 0 0.5rem;
+			font-size: 0.8rem;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: var(--muted);
+		}
+
+		.playlist-actions { display: flex; gap: 0.5rem; }
+		.btn-play { background: var(--accent-2); }
+		.btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+		.btn-danger:hover { background: rgba(239, 68, 68, 0.15); filter: none; }
+
+		.song-list { list-style: none; margin: 0 0 0.5rem; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+		.song-list li {
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
+			padding: 0.4rem 0.5rem;
+			border-radius: 8px;
+			font-size: 0.85rem;
+		}
+		.song-list li:hover { background: rgba(99, 102, 241, 0.08); }
+
+		.song-play {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 1.75rem;
+			height: 1.75rem;
+			flex-shrink: 0;
+			border-radius: 8px;
+			background: rgba(16, 185, 129, 0.15);
+			color: var(--accent-2);
+			text-decoration: none;
+			font-size: 0.8rem;
+		}
+		.song-play:hover { background: rgba(16, 185, 129, 0.3); }
+
+		.song-info { flex: 1; min-width: 0; }
+		.song-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+		.song-sub { color: var(--muted); font-size: 0.75rem; }
+
+		.btn-remove {
+			background: transparent;
+			color: var(--muted);
+			border: none;
+			padding: 0.25rem 0.5rem;
+			font-size: 1rem;
+			line-height: 1;
+		}
+		.btn-remove:hover { color: var(--danger); filter: none; }
+
+		.add-song-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+		.add-song-form select { flex: 1; max-width: 100%; }
+
+		/* ---------- Player tab ---------- */
+		.player-wrap { display: grid; gap: 1.5rem; grid-template-columns: 1fr 360px; }
+		@media (max-width: 900px) { .player-wrap { grid-template-columns: 1fr; } }
+
+		.player-card {
+			padding: 1.75rem;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			text-align: center;
+		}
+
+		.player-cover {
+			width: 11rem;
+			height: 11rem;
+			border-radius: 20px;
+			background: rgba(99, 102, 241, 0.15);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 0.35rem;
+		}
+		.player-cover span {
+			width: 0.4rem;
+			border-radius: 2px;
+			background: var(--accent);
+			height: 0.6rem;
+			transition: height 0.2s ease;
+		}
+		.player-cover.playing span { animation: eq-bounce 0.8s ease-in-out infinite; }
+		.player-cover.playing span:nth-child(1) { animation-delay: 0s; }
+		.player-cover.playing span:nth-child(2) { animation-delay: 0.2s; }
+		.player-cover.playing span:nth-child(3) { animation-delay: 0.4s; }
+		@keyframes eq-bounce {
+			0%, 100% { height: 0.6rem; }
+			50% { height: 3.4rem; }
+		}
+
+		.player-title {
+			margin: 1.25rem 0 0;
+			font-size: 1.25rem;
+			font-weight: 700;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 100%;
+		}
+		.player-subtitle {
+			margin: 0.25rem 0 0;
+			color: var(--muted);
+			font-size: 0.9rem;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 100%;
+		}
+
+		.progress-row {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			width: 100%;
+			margin-top: 1.5rem;
+			font-size: 0.75rem;
+			color: var(--muted);
+			font-variant-numeric: tabular-nums;
+		}
+		.progress-bar {
+			flex: 1;
+			height: 6px;
+			border-radius: 999px;
+			background: rgba(255, 255, 255, 0.1);
+			cursor: pointer;
+			overflow: hidden;
+		}
+		.progress-fill {
+			height: 100%;
+			width: 0%;
+			background: var(--accent);
+			border-radius: 999px;
+			transition: width 0.15s ease;
+		}
+
+		.transport {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 0.75rem;
+			margin-top: 1.25rem;
+		}
+		.icon-btn {
+			background: transparent;
+			color: var(--muted);
+			border: none;
+			border-radius: 50%;
+			width: 2.5rem;
+			height: 2.5rem;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-size: 1.05rem;
+			padding: 0;
+		}
+		.icon-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); filter: none; }
+		.icon-btn.active { color: var(--accent); background: rgba(99, 102, 241, 0.15); }
+
+		.play-btn {
+			width: 3.5rem;
+			height: 3.5rem;
+			border-radius: 50%;
+			background: var(--accent);
+			font-size: 1.25rem;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+		}
+
+		.volume-row {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			width: 100%;
+			max-width: 16rem;
+			margin-top: 1.5rem;
+		}
+		.volume-row input[type="range"] {
+			flex: 1;
+			accent-color: var(--accent);
+			height: 4px;
+		}
+
+		.queue {
+			padding: 1.1rem;
+			max-height: 640px;
+			overflow-y: auto;
+		}
+		.queue-header {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			margin-bottom: 0.75rem;
+			padding: 0 0.25rem;
+		}
+		.queue-header h2 {
+			margin: 0;
+			font-size: 0.8rem;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: var(--muted);
+		}
+		.queue-header span { color: var(--muted); font-size: 0.75rem; }
+
+		.queue-item {
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
+			padding: 0.5rem;
+			border-radius: 10px;
+			cursor: pointer;
+			transition: background 0.15s ease;
+		}
+		.queue-item:hover { background: rgba(255, 255, 255, 0.05); }
+		.queue-item.active { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
+
+		.queue-num {
+			width: 1.75rem;
+			height: 1.75rem;
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 8px;
+			background: rgba(99, 102, 241, 0.15);
+			color: var(--accent);
+			font-size: 0.75rem;
+		}
+		.queue-info { flex: 1; min-width: 0; }
+		.queue-title { display: block; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+		.queue-sub { color: var(--muted); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+		.player-empty { padding: 2.5rem; text-align: center; }
+		.player-empty button { margin-top: 0.75rem; }
 	</style>
 </head>
 <body>
 	<aside class="sidebar">
 		<h1>Gradio</h1>
 		<nav>
-			<button class="tab active" data-title="Splits" data-subtitle="Grouped by radio" data-controls="true"
-				hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML"
-				hx-on:click="setTab(this)">Splits</button>
-			<button class="tab" data-title="Play Lists" data-subtitle="Your saved play lists" data-controls="false"
-				hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML"
-				hx-on:click="setTab(this)">Play Lists</button>
+			<button class="tab active" data-tab="splits" data-title="Splits" data-subtitle="Grouped by radio" data-controls="true"
+				hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/splits"
+				hx-on:click="selectTab('splits')">Splits</button>
+			<button class="tab" data-tab="player" data-title="Player" data-subtitle="Your queue" data-controls="false"
+				hx-get="/player/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/player"
+				hx-on:click="selectTab('player')">Player</button>
+			<button class="tab" data-tab="playlists" data-title="Play Lists" data-subtitle="Built from your splits" data-controls="false"
+				hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/playlists"
+				hx-on:click="selectTab('playlists')">Play Lists</button>
 		</nav>
 	</aside>
 	<main class="main">
@@ -197,17 +516,203 @@
 				hx-disabled-elt="this">Refresh</button>
 		</div>
 		<div id="content" hx-get="/splits/view" hx-trigger="load" hx-swap="innerHTML">
-			<p class="empty">Loading splits…</p>
+			<p class="empty">Loading…</p>
 		</div>
 	</main>
 	<script>
-		function setTab(el) {
+		// ---------- Tab navigation ----------
+		function selectTab(name, load) {
+			const tab = document.querySelector('.tab[data-tab="' + name + '"]');
+			if (!tab) return;
 			document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-			el.classList.add('active');
-			document.getElementById('page-title').textContent = el.dataset.title;
-			document.getElementById('page-subtitle').textContent = el.dataset.subtitle;
-			document.getElementById('controls').style.display = el.dataset.controls === 'true' ? '' : 'none';
+			tab.classList.add('active');
+			document.getElementById('page-title').textContent = tab.dataset.title;
+			document.getElementById('page-subtitle').textContent = tab.dataset.subtitle;
+			document.getElementById('controls').style.display = tab.dataset.controls === 'true' ? '' : 'none';
+			if (load === undefined || load) {
+				htmx.ajax('GET', tab.getAttribute('hx-get'), '#content');
+			}
 		}
+
+		function tabFromPath() {
+			const p = window.location.pathname;
+			if (p.startsWith('/player')) return 'player';
+			if (p.startsWith('/playlists')) return 'playlists';
+			return 'splits';
+		}
+
+		document.addEventListener('DOMContentLoaded', () => {
+			// The #content div auto-loads /splits/view via hx-trigger="load" on a
+			// fresh page; when arriving on a sub-route pick the matching tab instead.
+			if (window.location.pathname !== '/' && window.location.pathname !== '/splits') {
+				const name = tabFromPath();
+				selectTab(name, true);
+			}
+		});
+
+		// ---------- Audio player ----------
+		function fmtTime(s) {
+			if (!isFinite(s) || s < 0) return '0:00';
+			const t = Math.floor(s);
+			const m = Math.floor(t / 60);
+			const ss = t % 60;
+			return m + ':' + String(ss).padStart(2, '0');
+		}
+
+		function initPlayer(root) {
+			const audio = root.querySelector('[data-audio]');
+			if (!audio || root.dataset.playerReady) return;
+			root.dataset.playerReady = '1';
+
+			const queue = [...root.querySelectorAll('[data-player-track]')].map(li => ({
+				src: li.getAttribute('data-src'),
+				title: li.getAttribute('data-title'),
+				el: li,
+			}));
+
+			const titleEl = root.querySelector('[data-player-title]');
+			const timeEl = root.querySelector('[data-time]');
+			const durEl = root.querySelector('[data-duration]');
+			const fillEl = root.querySelector('[data-progress-fill]');
+			const bar = root.querySelector('[data-progress-bar]');
+			const toggleBtn = root.querySelector('[data-player-toggle]');
+			const prevBtn = root.querySelector('[data-player-prev]');
+			const nextBtn = root.querySelector('[data-player-next]');
+			const shuffleBtn = root.querySelector('[data-player-shuffle]');
+			const repeatBtn = root.querySelector('[data-player-repeat]');
+			const muteBtn = root.querySelector('[data-player-mute]');
+			const volInput = root.querySelector('[data-player-volume]');
+			const eq = root.querySelector('[data-eq]');
+
+			let index = -1;
+			let shuffle = false;
+			let repeat = 'off';
+			let shuffleOrder = [];
+			const VOLUME_KEY = 'gradio-player-volume';
+
+			function setTitles() {
+				if (titleEl && queue[index]) titleEl.textContent = queue[index].title;
+			}
+
+			function updateUI() {
+				queue.forEach((t, i) => t.el.classList.toggle('active', i === index));
+				const playing = !audio.paused && !audio.ended;
+				if (toggleBtn) toggleBtn.textContent = playing ? '&#10074;&#10074;' : '&#9654;';
+				if (eq) eq.classList.toggle('playing', playing);
+			}
+
+			function buildShuffle() {
+				shuffleOrder = queue.map((_, i) => i);
+				for (let i = shuffleOrder.length - 1; i > 0; i--) {
+					const j = Math.floor(Math.random() * (i + 1));
+					[shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
+				}
+			}
+
+			function nextIdx() {
+				if (queue.length === 0) return -1;
+				if (shuffle) {
+					if (shuffleOrder.length !== queue.length) buildShuffle();
+					const pos = (shuffleOrder.indexOf(index) + 1) % shuffleOrder.length;
+					return shuffleOrder[pos];
+				}
+				const i = index + 1;
+				return i < queue.length ? i : (repeat === 'all' ? 0 : -1);
+			}
+
+			function prevIdx() {
+				if (queue.length === 0) return -1;
+				if (shuffle) {
+					if (shuffleOrder.length !== queue.length) buildShuffle();
+					const pos = (shuffleOrder.indexOf(index) - 1 + shuffleOrder.length) % shuffleOrder.length;
+					return shuffleOrder[pos];
+				}
+				const i = index - 1;
+				return i >= 0 ? i : (repeat === 'all' ? queue.length - 1 : 0);
+			}
+
+			function playAt(i) {
+				if (i < 0 || i >= queue.length) return;
+				index = i;
+				audio.src = queue[i].src;
+				audio.currentTime = 0;
+				audio.play().catch(() => {});
+				setTitles();
+				updateUI();
+			}
+
+			function next() { const i = nextIdx(); if (i < 0) { audio.pause(); } else playAt(i); }
+			function prev() {
+				if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+				const i = prevIdx();
+				if (i >= 0) playAt(i);
+			}
+
+			audio.addEventListener('timeupdate', () => {
+				if (timeEl) timeEl.textContent = fmtTime(audio.currentTime);
+				if (fillEl && audio.duration) fillEl.style.width = (audio.currentTime / audio.duration * 100) + '%';
+			});
+			audio.addEventListener('loadedmetadata', () => {
+				if (durEl) durEl.textContent = fmtTime(audio.duration);
+			});
+			audio.addEventListener('play', updateUI);
+			audio.addEventListener('pause', updateUI);
+			audio.addEventListener('ended', () => {
+				if (repeat === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); return; }
+				next();
+			});
+
+			if (toggleBtn) toggleBtn.addEventListener('click', () => {
+				if (queue.length === 0) return;
+				if (audio.paused) audio.play().catch(() => {}); else audio.pause();
+			});
+			if (nextBtn) nextBtn.addEventListener('click', next);
+			if (prevBtn) prevBtn.addEventListener('click', prev);
+			if (shuffleBtn) shuffleBtn.addEventListener('click', () => {
+				shuffle = !shuffle;
+				if (shuffle) buildShuffle();
+				shuffleBtn.classList.toggle('active', shuffle);
+			});
+			if (repeatBtn) repeatBtn.addEventListener('click', () => {
+				const order = ['off', 'all', 'one'];
+				repeat = order[(order.indexOf(repeat) + 1) % order.length];
+				repeatBtn.classList.toggle('active', repeat !== 'off');
+				repeatBtn.textContent = repeat === 'one' ? '&#128258;' : '&#128257;';
+			});
+			if (bar) bar.addEventListener('click', (e) => {
+				if (!audio.duration) return;
+				const r = bar.getBoundingClientRect();
+				audio.currentTime = audio.duration * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+			});
+			if (volInput) {
+				volInput.value = localStorage.getItem(VOLUME_KEY) || '0.85';
+				audio.volume = parseFloat(volInput.value);
+				volInput.addEventListener('input', () => {
+					audio.volume = parseFloat(volInput.value);
+					localStorage.setItem(VOLUME_KEY, volInput.value);
+				});
+			}
+			if (muteBtn) muteBtn.addEventListener('click', () => {
+				audio.muted = !audio.muted;
+				muteBtn.textContent = audio.muted ? '&#128263;' : '&#128266;';
+			});
+			queue.forEach((t, i) => t.el.addEventListener('click', () => playAt(i)));
+
+			if (queue.length > 0) {
+				index = queue.findIndex(t => t.el.classList.contains('active'));
+				if (index < 0) index = 0;
+				audio.src = queue[index].src;
+				setTitles();
+				updateUI();
+			}
+		}
+
+		document.body.addEventListener('htmx:afterSwap', (e) => {
+			const target = e.detail && e.detail.target;
+			if (target && target.querySelector && target.querySelector('[data-audio]')) {
+				initPlayer(target);
+			}
+		});
 	</script>
 </body>
 </html>

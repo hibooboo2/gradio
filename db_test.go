@@ -25,7 +25,7 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	// Recreate the schema on the freshly-dropped tables.
 	require.NoError(t, createSchema(recordDB))
