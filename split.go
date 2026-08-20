@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -49,7 +50,12 @@ const (
 	classificationLikelySong = "likely_song"
 	classificationCommercial = "commercial"
 	classificationSong      = "song"
+	classificationReSplit   = "re_split"
 )
+
+// errCutOutsideSplit is returned when a resplit cut time falls outside a
+// split's boundaries.
+var errCutOutsideSplit = errors.New("cut time is outside the split")
 
 var (
 	silenceStartRE = regexp.MustCompile(`silence_start:\s*([0-9.]+)`)
@@ -280,6 +286,105 @@ func splitRecording(ctx context.Context, rec Recording) error {
 	}
 
 	return g.Wait()
+}
+
+// nextSplitPositions returns n positions not yet used by any split of a
+// recording, so newly created splits never collide with existing ones.
+func nextSplitPositions(recordingID int64, n int) ([]int, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	var maxPos sql.NullInt64
+	if err := recordDB.QueryRow(
+		`SELECT MAX(position) FROM splits WHERE recording_id = $1`,
+		recordingID,
+	).Scan(&maxPos); err != nil {
+		return nil, err
+	}
+
+	pos := make([]int, n)
+	next := int(maxPos.Int64)
+	for i := range pos {
+		next++
+		pos[i] = next
+	}
+	return pos, nil
+}
+
+// resplitSplit replaces a split with two finer splits cut at the given time
+// within the original recording. The original split's boundaries and output
+// file are left untouched; only its classification changes to re_split. Both
+// new splits get their own output files, extracted from the original recording
+// (not from the existing split file) so the new cut point is exact.
+func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Split, splitA Split, splitB Split, err error) {
+	orig, err := fetchSplit(splitID)
+	if err != nil {
+		return Split{}, Split{}, Split{}, err
+	}
+	if cut <= orig.Start || cut >= orig.End {
+		return Split{}, Split{}, Split{}, fmt.Errorf("%w: cut %v outside [%v, %v]", errCutOutsideSplit, cut, orig.Start, orig.End)
+	}
+	if orig.Classification == classificationReSplit {
+		return Split{}, Split{}, Split{}, fmt.Errorf("split %d is already re_split", splitID)
+	}
+
+	wd, _ := os.Getwd()
+	inputPath := orig.SourcePath
+	if !filepath.IsAbs(inputPath) {
+		inputPath = filepath.Join(wd, inputPath)
+	}
+
+	positions, err := nextSplitPositions(orig.RecordingID, 2)
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("allocate split positions: %w", err)
+	}
+
+	radio := radioFromPath(orig.SourcePath)
+
+	outA, err := writeSegment(ctx, radio, inputPath, orig.Start, cut, positions[0])
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("write first segment: %w", err)
+	}
+	outB, err := writeSegment(ctx, radio, inputPath, cut, orig.End, positions[1])
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("write second segment: %w", err)
+	}
+
+	a := Split{
+		RecordingID:    orig.RecordingID,
+		SourcePath:     orig.SourcePath,
+		Index:          positions[0],
+		Start:          orig.Start,
+		End:            cut,
+		OutputPath:     outA,
+		Classification: orig.Classification,
+	}
+	b := Split{
+		RecordingID:    orig.RecordingID,
+		SourcePath:     orig.SourcePath,
+		Index:          positions[1],
+		Start:          cut,
+		End:            orig.End,
+		OutputPath:     outB,
+		Classification: orig.Classification,
+	}
+
+	if err := insertSplit(a); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("store first split: %w", err)
+	}
+	if err := insertSplit(b); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("store second split: %w", err)
+	}
+
+	// Mark the original only after the new splits exist so a failure leaves it
+	// fully playable.
+	orig.Classification = classificationReSplit
+	if err := updateSplit(orig); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("mark split re_split: %w", err)
+	}
+
+	return orig, a, b, nil
 }
 
 func detectSilence(ctx context.Context, inputPath string) (chan silence, error) {

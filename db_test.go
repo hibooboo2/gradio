@@ -153,30 +153,31 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	plays, rating, err := fetchSongStats(splitIDs[0])
 	require.NoError(t, err)
 	require.Equal(t, 2, plays)
-	require.Empty(t, rating)
+	require.Zero(t, rating)
 
-	// rating can be set, toggled, and cleared without losing play counts.
-	require.NoError(t, setRating(splitIDs[0], "like"))
+	// A like increments the rating counter; a dislike decrements it. Play
+	// counts are preserved.
+	require.NoError(t, setRating(splitIDs[0], true))
 	_, rating, err = fetchSongStats(splitIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, "like", rating)
+	require.Equal(t, 1, rating)
 
-	require.NoError(t, setRating(splitIDs[0], "dislike"))
+	require.NoError(t, setRating(splitIDs[0], true))
 	_, rating, err = fetchSongStats(splitIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, "dislike", rating)
+	require.Equal(t, 2, rating)
 
-	require.NoError(t, setRating(splitIDs[0], ""))
+	require.NoError(t, setRating(splitIDs[0], false))
 	plays, rating, err = fetchSongStats(splitIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, 2, plays, "clearing a rating must keep the play count")
-	require.Empty(t, rating)
+	require.Equal(t, 2, plays, "a rating must not change the play count")
+	require.Equal(t, 1, rating)
 
 	// A split that was never played/rated reports zero stats.
 	plays, rating, err = fetchSongStats(splitIDs[1])
 	require.NoError(t, err)
 	require.Zero(t, plays)
-	require.Empty(t, rating)
+	require.Zero(t, rating)
 
 	// Global shuffle skips commercials and returns everything else once.
 	batch, err := fetchGlobalShuffleBatch(100, nil)

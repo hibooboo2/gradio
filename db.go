@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,9 +64,9 @@ type Split struct {
 	OutputPath     string
 	Classification string
 	// Plays and Rating are populated only when a query joins the song_plays
-	// table (player queues, global shuffle).
+	// table (player queues, global shuffle). Rating is the like count.
 	Plays  int
-	Rating string
+	Rating int
 }
 
 // Duration returns the length of the split in seconds.
@@ -446,7 +448,7 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
-		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
 		 JOIN recordings r ON r.id = s.recording_id
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
@@ -475,8 +477,8 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 // fetchGlobalShuffleBatch returns up to limit splits for the global shuffle,
 // ordered least-listened first (fewest plays) with a random tiebreak so
 // repeated shuffles keep surfacing music the user has not heard yet. Splits
-// marked as commercials are skipped, as are any splits whose ids appear in
-// exclude (already played in the current shuffle session).
+// marked as commercials or re_split are skipped, as are any splits whose ids
+// appear in exclude (already played in the current shuffle session).
 func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
@@ -485,15 +487,26 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 		exclude = []int64{}
 	}
 
+	// Pass the exclusion list as a jsonb/array literal so an empty slice still
+	// has a determinable type.
+	excludeArg := "{}"
+	if len(exclude) > 0 {
+		parts := make([]string, 0, len(exclude))
+		for _, id := range exclude {
+			parts = append(parts, strconv.FormatInt(id, 10))
+		}
+		excludeArg = "{" + strings.Join(parts, ",") + "}"
+	}
+
 	rows, err := recordDB.Query(
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
-		 WHERE s.classification != $1 AND s.id != ALL($2::INT[])
+		 WHERE s.classification != $1 AND s.classification != $2 AND s.id != ALL($3::INT[])
 		 ORDER BY COALESCE(sp.plays, 0) ASC, random()
-		 LIMIT $3`,
-		classificationCommercial, exclude, limit,
+		 LIMIT $4`,
+		classificationCommercial, classificationReSplit, excludeArg, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch shuffle: %w", err)
@@ -527,30 +540,31 @@ func recordPlay(splitID int64) error {
 	return err
 }
 
-// setRating records a like, dislike, or (when rating is "") clears the rating
-// for a split. Existing play counts are preserved.
+// setRating records a like or dislike for a split. A like (wasLiked=true)
+// increments the rating counter and a dislike (wasLiked=false) decrements it.
+// Existing play counts are preserved.
 func setRating(splitID int64, wasLiked bool) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	liked := 0
-	if wasLiked {
-		liked = 1
+	delta := 1
+	if !wasLiked {
+		delta = -1
 	}
 	_, err := recordDB.Exec(
-		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 1, $2)
-		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + 1, updated_at = now()`,
-		splitID, liked,
+		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 0, $2)
+		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + $2, updated_at = now()`,
+		splitID, delta,
 	)
 	return err
 }
 
-// fetchSongStats returns the play count and rating for a split, or zero values
-// when the split has never been played or rated.
-func fetchSongStats(splitID int64) (plays int, rating string, err error) {
+// fetchSongStats returns the play count and rating (like count) for a split,
+// or zero values when the split has never been played or rated.
+func fetchSongStats(splitID int64) (plays int, rating int, err error) {
 	if recordDB == nil {
-		return 0, "", fmt.Errorf("nil db")
+		return 0, 0, fmt.Errorf("nil db")
 	}
 
 	err = recordDB.QueryRow(
@@ -558,10 +572,10 @@ func fetchSongStats(splitID int64) (plays int, rating string, err error) {
 		splitID,
 	).Scan(&plays, &rating)
 	if err == sql.ErrNoRows {
-		return 0, "", nil
+		return 0, 0, nil
 	}
 	if err != nil {
-		return 0, "", err
+		return 0, 0, err
 	}
 	return plays, rating, nil
 }

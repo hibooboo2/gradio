@@ -200,15 +200,16 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Like, then dislike, then clear.
-	for _, rating := range []string{"like", "dislike", ""} {
+	// Like twice, then dislike once: the rating counter tracks +1, +1, -1.
+	expectedRatings := []float64{1, 2, 1}
+	for i, rating := range []string{"like", "like", "dislike"} {
 		body := `{"rating":"` + rating + `"}`
 		resp, err := http.Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/rating", "application/json", bytes.NewBufferString(body))
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		var out map[string]any
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
-		require.Equal(t, rating, out["rating"])
+		require.Equal(t, expectedRatings[i], out["rating"])
 		require.Equal(t, float64(3), out["plays"], "rating must not change the play count")
 		resp.Body.Close()
 	}

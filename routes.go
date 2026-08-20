@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -62,6 +63,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	PATCH  /splits/{id}           update a split's start, end, and/or classification
 //	POST   /api/splits/{id}/play  record that a split was listened to
 //	POST   /api/splits/{id}/rating  like/dislike a split ({"rating":"like"|"dislike"|""})
+//	POST   /api/splits/{id}/resplit  cut a split at {"cut":seconds} into two new splits
 //	GET    /recordings            list all recordings
 //	GET    /music/{path...}       serve a split output file from split_music/
 //
@@ -96,6 +98,7 @@ func routes() *http.ServeMux {
 	mux.HandleFunc("GET /recordings", handleListRecordings)
 	mux.HandleFunc("POST /api/splits/{id}/play", handleRecordPlay)
 	mux.HandleFunc("POST /api/splits/{id}/rating", handleSetRating)
+	mux.HandleFunc("POST /api/splits/{id}/resplit", handleResplitSplit)
 
 	// Global shuffle queue (JSON) for the player's Shuffle All mode.
 	mux.HandleFunc("GET /api/shuffle", handleShuffleJSON)
@@ -237,8 +240,8 @@ func handleRecordPlay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "plays": plays, "rating": rating})
 }
 
-// handleSetRating records a like or dislike for a split, or clears it when the
-// submitted rating is empty.
+// handleSetRating records a like or dislike for a split. A like increments the
+// split's rating counter; a dislike decrements it.
 func handleSetRating(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -253,8 +256,8 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Rating != "" && req.Rating != "like" && req.Rating != "dislike" {
-		writeError(w, http.StatusBadRequest, "rating must be \"like\", \"dislike\", or empty")
+	if req.Rating != "like" && req.Rating != "dislike" {
+		writeError(w, http.StatusBadRequest, "rating must be \"like\" or \"dislike\"")
 		return
 	}
 
@@ -281,6 +284,46 @@ func handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, recordings)
+}
+
+// handleResplitSplit cuts the current split at the given time, creating two new
+// splits (with their own output files extracted from the original recording)
+// and marking the original split as re_split.
+func handleResplitSplit(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid split id")
+		return
+	}
+
+	var req struct {
+		Cut *float64 `json:"cut"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Cut == nil {
+		writeError(w, http.StatusBadRequest, "cut is required")
+		return
+	}
+
+	original, a, b, err := resplitSplit(r.Context(), id, *req.Cut)
+	if err != nil {
+		if errors.Is(err, errCutOutsideSplit) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.ErrorContext(r.Context(), "resplit split", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"original": original,
+		"a":        a,
+		"b":        b,
+	})
 }
 
 // splitsViewTemplate renders the htmx fragment listing all splits, grouped by

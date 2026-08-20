@@ -31,7 +31,7 @@ type PlaylistSong struct {
 	Position   int
 	Split      Split
 	Plays      int
-	Rating     string
+	Rating     int
 }
 
 // createPlaylist inserts a new playlist and returns the created row.
@@ -130,7 +130,7 @@ func fetchPlaylistSongs(playlistID int64) ([]PlaylistSong, error) {
 	rows, err := recordDB.Query(
 		`SELECT ps.playlist_id, ps.split_id, ps.position,
 		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
-		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM playlist_splits ps
 		 JOIN splits s ON s.id = ps.split_id
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
@@ -405,6 +405,8 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 			<button type="button" data-player-commercial disabled title="Classify the currently playing track as a commercial">&#128226; Mark Commercial</button>
 		</div>
 
+		<p class="resplit-status" data-resplit-status hidden></p>
+
 		<div class="shuffle-all-row">
 			<button type="button" class="btn-play" data-player-shuffle-all
 				title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
@@ -423,7 +425,9 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 				data-player-track
 				data-src="{{musicURL .Split.OutputPath}}"
 				data-title="{{songTitle .Split}}"
-				data-split="{{.Split.ID}}">
+				data-split="{{.Split.ID}}"
+				data-start="{{.Split.Start}}"
+				data-end="{{.Split.End}}">
 				<span class="queue-num">{{.Position | printf "%d"}}</span>
 				<div class="queue-info">
 					<span class="queue-title">{{songTitle .Split}}</span>
@@ -488,7 +492,7 @@ type shuffleTrack struct {
 	End            float64 `json:"end"`
 	Classification string  `json:"classification"`
 	Plays          int     `json:"plays"`
-	Rating         string  `json:"rating"`
+	Rating         int     `json:"rating"`
 }
 
 // parseSplitIDs parses a comma-separated list of split ids, ignoring any

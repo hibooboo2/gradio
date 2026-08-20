@@ -95,3 +95,116 @@ func TestClassifySplit(t *testing.T) {
 	require.Equal(t, classificationLikelySong, classifySplit(0, 60))
 	require.Equal(t, classificationLikelySong, classifySplit(100, 300))
 }
+
+func TestResplitSplit(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "resplit.mp3")
+	// A continuous 40s tone (a real file so writeSegment can slice it).
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-y",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=40",
+		"-c:a", "libmp3lame", "-b:a", "128k", fixture)
+	require.NoError(t, cmd.Run())
+
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	recID, err := insertRecording(fixture, "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+	orig := Split{
+		RecordingID: recID,
+		SourcePath:  fixture,
+		Index:       0,
+		Start:       0,
+		End:         40,
+		OutputPath:  filepath.Join(dir, "output_00000.mp3"),
+	}
+	// Create the original output file so the "original is untouched" check has
+	// something to compare against.
+	cmd = exec.Command("ffmpeg", "-hide_banner", "-y",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=40",
+		"-c:a", "libmp3lame", "-b:a", "128k", orig.OutputPath)
+	require.NoError(t, cmd.Run())
+	require.NoError(t, insertSplit(orig))
+	all, err := fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	orig = all[0]
+
+	origPath := orig.OutputPath
+	origInfo, err := os.Stat(origPath)
+	require.NoError(t, err)
+	origSize := origInfo.Size()
+
+	original, a, b, err := resplitSplit(t.Context(), orig.ID, 20)
+	require.NoError(t, err)
+	require.Equal(t, classificationReSplit, original.Classification)
+	require.InDelta(t, orig.Start, a.Start, 0.001)
+	require.InDelta(t, 20, a.End, 0.001)
+	require.InDelta(t, 20, b.Start, 0.001)
+	require.InDelta(t, orig.End, b.End, 0.001)
+
+	// Both new splits produced their own files from the original recording.
+	for _, s := range []Split{a, b} {
+		info, err := os.Stat(s.OutputPath)
+		require.NoError(t, err)
+		require.Positive(t, info.Size())
+		require.NotEqual(t, origPath, s.OutputPath)
+		d, err := fileDuration(s.OutputPath)
+		require.NoError(t, err)
+		require.InDelta(t, s.End-s.Start, d, 0.5)
+	}
+
+	// The original file is untouched, and its row is now re_split.
+	afterInfo, err := os.Stat(origPath)
+	require.NoError(t, err)
+	require.Equal(t, origSize, afterInfo.Size())
+
+	fetched, err := fetchSplit(orig.ID)
+	require.NoError(t, err)
+	require.Equal(t, classificationReSplit, fetched.Classification)
+
+	// The database now has three splits: the original plus the two new ones.
+	all, err = fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+
+	// A cut outside one of the new (non re_split) splits is rejected without
+	// creating rows.
+	allSplits, err := fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, allSplits, 3)
+	var aID int64
+	for _, s := range allSplits {
+		if s.Classification != classificationReSplit {
+			aID = s.ID
+			break
+		}
+	}
+	require.NotZero(t, aID)
+	_, _, _, err = resplitSplit(t.Context(), aID, -1)
+	require.ErrorIs(t, err, errCutOutsideSplit)
+	all, err = fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+
+	// Re-splitting an already re_split split is rejected.
+	_, _, _, err = resplitSplit(t.Context(), orig.ID, 10)
+	require.Error(t, err)
+
+	// re_split splits are excluded from the global shuffle.
+	batch, err := fetchGlobalShuffleBatch(100, nil)
+	require.NoError(t, err)
+	for _, s := range batch {
+		require.NotEqual(t, classificationReSplit, s.Classification)
+	}
+}

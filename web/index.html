@@ -466,6 +466,11 @@
 		.mark-row button.success {
 			background: var(--accent-2);
 		}
+		.resplit-status {
+			margin: 0.75rem 0 0;
+			font-size: 0.85rem;
+			color: var(--accent-2);
+		}
 		.rating-row {
 			display: flex;
 			justify-content: center;
@@ -914,7 +919,9 @@
 					src: t.src,
 					title: t.title,
 					split: String(t.id),
-					rating: t.rating || '',
+					start: t.start,
+					end: t.end,
+					rating: t.rating || 0,
 					plays: t.plays || 0,
 					sub: fmtTime(t.start) + ' – ' + fmtTime(t.end) + ' · ' +
 						(t.classification || '') + (t.plays ? ' · ♪ ' + t.plays : ''),
@@ -930,13 +937,15 @@
 			async function rate(rating) {
 				const cur = current();
 				if (!cur || !cur.split) return;
-				const nextRating = (cur.rating === rating) ? '' : rating;
-				cur.rating = nextRating;
+				// rating is a numeric like counter on the server: like +1,
+				// dislike -1. Track it locally for immediate feedback.
+				if (rating === 'like') cur.rating = (cur.rating || 0) + 1;
+				else if (rating === 'dislike') cur.rating = (cur.rating || 0) - 1;
 				try {
 					await fetch('/api/splits/' + cur.split + '/rating', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ rating: nextRating }),
+						body: JSON.stringify({ rating: rating }),
 					});
 				} catch (err) { /* ignore network errors */ }
 				renderAll();
@@ -1171,6 +1180,8 @@
 				src: li.getAttribute('data-src'),
 				title: li.getAttribute('data-title'),
 				split: li.getAttribute('data-split'),
+				start: parseFloat(li.getAttribute('data-start')),
+				end: parseFloat(li.getAttribute('data-end')),
 				sub: (li.querySelector('.queue-sub') || {}).textContent || '',
 				el: li,
 			}));
@@ -1256,9 +1267,11 @@
 			}
 			if (commercialBtn) commercialBtn.disabled = !Player.hasQueue;
 			if (songBtn) songBtn.disabled = !Player.hasQueue;
-			const curRating = cur ? (cur.rating || '') : '';
+			// Rating is a numeric like count; reflect it on the like button.
 			rateBtns.forEach(btn => {
-				btn.classList.toggle('active', btn.getAttribute('data-rating') === curRating);
+				if (btn.getAttribute('data-rating') === 'like') {
+					btn.title = 'Like this track' + (cur && cur.rating ? ' (' + cur.rating + ')' : '');
+				}
 			});
 		}
 
@@ -1342,6 +1355,44 @@
 			}
 			if (commercialBtn) bindMarkButton(wrap, commercialBtn, 'commercial', '✓ Marked Commercial');
 			if (songBtn) bindMarkButton(wrap, songBtn, 'song', '✓ Marked as Song');
+			const statusEl = wrap.querySelector('[data-resplit-status]');
+			const barEl = wrap.querySelector('[data-progress-bar]');
+			if (barEl) barEl.addEventListener('contextmenu', async (e) => {
+				e.preventDefault();
+				const cur = Player.current();
+				if (!cur || !cur.split || !(cur.start >= 0) || !(cur.end > cur.start)) return;
+				const r = barEl.getBoundingClientRect();
+				const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+				const dur = Player.audio.duration;
+				if (!(dur > 0)) return;
+				const curRel = Player.audio.currentTime;
+				const curPos = cur.start + (curRel / dur) * (cur.end - cur.start);
+				const cut = cur.start + frac * (cur.end - cur.start);
+				if (!(cut > cur.start + 0.5) || !(cut < cur.end - 0.5)) {
+					if (statusEl) { statusEl.textContent = 'Cut is too close to the split edge'; statusEl.hidden = false; }
+					return;
+				}
+				if (statusEl) { statusEl.textContent = 'Splitting at ' + Player.fmtTime(cut) + '…'; statusEl.hidden = false; }
+				try {
+					const res = await fetch('/api/splits/' + cur.split + '/resplit', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ cut: cut }),
+					});
+					if (!res.ok) { if (statusEl) statusEl.textContent = 'Failed to split'; return; }
+					const data = await res.json();
+					if (statusEl) {
+						statusEl.textContent = 'Split created at ' + Player.fmtTime(cut) +
+							' — refresh the playlist to hear the new tracks. Original marked re_split.';
+					}
+					const items = wrap.querySelectorAll('[data-player-track]');
+					const item = items[Player.index];
+					if (item) {
+						const cls = item.querySelector('[data-cls]');
+						if (cls) cls.textContent = data.original.classification;
+					}
+				} catch (err) { if (statusEl) statusEl.textContent = 'Failed to split'; }
+			});
 			wrap.querySelectorAll('[data-player-rate]').forEach(btn => {
 				btn.addEventListener('click', () => Player.rate(btn.getAttribute('data-rating')));
 			});
