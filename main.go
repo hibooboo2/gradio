@@ -56,7 +56,7 @@ func main() {
 	record := flag.Bool("record", false, "record radio stations")
 	watch := flag.Bool("watch", false, "watch files for splitts")
 	file := flag.String("f", "", "file to auto split")
-	addr := flag.String("http", ":8000", "http listen address for the management API")
+	addr := flag.String("http", "", "http listen address for the management API")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
@@ -73,7 +73,13 @@ func main() {
 	var wg errgroup.Group
 
 	wg.Go(func() error {
-		return serveAPI(ctx, *addr)
+		if *addr != "" {
+			if (*addr)[0] != ':' {
+				*addr = ":" + *addr
+			}
+			return serveAPI(ctx, *addr)
+		}
+		return nil
 	})
 
 	if *watch {

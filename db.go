@@ -166,53 +166,6 @@ func createSchema(db *sql.DB) error {
 	return err
 }
 
-// migrateSongRating upgrades an existing deployment whose song_plays.rating
-// column is a STRING (the "like"/"dislike"/"" design) to the INT like-counter
-// design (like +1, dislike -1). It is a no-op when the column is already INT.
-// The migration is idempotent and safe to run on every startup.
-func migrateSongRating(db *sql.DB) error {
-	var dataType string
-	err := db.QueryRow(
-		`SELECT data_type FROM information_schema.columns
-		 WHERE table_name = 'song_plays' AND column_name = 'rating'`,
-	).Scan(&dataType)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	switch strings.ToLower(dataType) {
-	case "int", "int4", "int8", "bigint", "smallint":
-		return nil
-	}
-
-	// Convert each stored string to an integer counter value, then swap the
-	// column type. In the string design a split holds at most one value:
-	//   ''       -> 0   (no rating)
-	//   'like'   -> 1
-	//   'dislike'-> -1
-	if _, err := db.Exec(`ALTER TABLE song_plays ADD COLUMN IF NOT EXISTS rating_int INT NOT NULL DEFAULT 0`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`
-		UPDATE song_plays SET rating_int =
-			CASE rating
-				WHEN 'like' THEN 1
-				WHEN 'dislike' THEN -1
-				ELSE 0
-			END`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`ALTER TABLE song_plays DROP COLUMN rating`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`ALTER TABLE song_plays RENAME COLUMN rating_int TO rating`); err != nil {
-		return err
-	}
-	return nil
-}
-
 // insertRecording records that a source file was produced and saved by the
 // recorder. It returns the recording id, or 0 if the file was already present
 // (same source path) so rotating/restarting does not create duplicates.
