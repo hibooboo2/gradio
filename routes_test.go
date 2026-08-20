@@ -27,6 +27,7 @@ func TestPageURLsServeShell(t *testing.T) {
 		"/playlists?expand=99",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.SetBasicAuth(testUsername, testPassword)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code, "path %s: %s", path, rec.Body.String())
@@ -82,7 +83,7 @@ func TestRoutes(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := authedClient().Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -100,7 +101,7 @@ func TestRoutes(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := authedClient().Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -113,7 +114,7 @@ func TestRoutes(t *testing.T) {
 	})
 
 	t.Run("get single split", func(t *testing.T) {
-		resp, err := http.Get(server.URL + "/splits/" + strconv.FormatInt(first.ID, 10))
+		resp, err := authedClient().Get(server.URL + "/splits/" + strconv.FormatInt(first.ID, 10))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -124,14 +125,14 @@ func TestRoutes(t *testing.T) {
 	})
 
 	t.Run("get missing split", func(t *testing.T) {
-		resp, err := http.Get(server.URL + "/splits/999999999")
+		resp, err := authedClient().Get(server.URL + "/splits/999999999")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 
 	t.Run("list recordings", func(t *testing.T) {
-		resp, err := http.Get(server.URL + "/recordings")
+		resp, err := authedClient().Get(server.URL + "/recordings")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -144,7 +145,7 @@ func TestRoutes(t *testing.T) {
 
 func listSplits(t *testing.T, baseURL string) []Split {
 	t.Helper()
-	resp, err := http.Get(baseURL + "/api/splits")
+	resp, err := authedClient().Get(baseURL + "/api/splits")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -191,7 +192,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 
 	// Recording a play increments the count and returns the new stats.
 	for i := 0; i < 3; i++ {
-		resp, err := http.Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/play", "application/json", nil)
+		resp, err := authedClient().Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/play", "application/json", nil)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		var out map[string]any
@@ -203,7 +204,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	// Like, then dislike, then clear.
 	for _, rating := range []string{"like", "dislike", ""} {
 		body := `{"rating":"` + rating + `"}`
-		resp, err := http.Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/rating", "application/json", bytes.NewBufferString(body))
+		resp, err := authedClient().Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/rating", "application/json", bytes.NewBufferString(body))
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		var out map[string]any
@@ -215,14 +216,14 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 
 	// An invalid rating is rejected.
 	body := `{"rating":"meh"}`
-	resp, err := http.Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/rating", "application/json", bytes.NewBufferString(body))
+	resp, err := authedClient().Post(server.URL+"/api/splits/"+strconv.FormatInt(splits[0].ID, 10)+"/rating", "application/json", bytes.NewBufferString(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
 
 	// Global shuffle returns only the unrated split (the rated one is not
 	// commercial, so both should appear in a large batch).
-	resp, err = http.Get(server.URL + "/api/shuffle")
+	resp, err = authedClient().Get(server.URL + "/api/shuffle")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var tracks []shuffleTrack
@@ -231,7 +232,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	resp.Body.Close()
 
 	// Excluding the second split leaves only the first.
-	resp, err = http.Get(server.URL + "/api/shuffle?exclude=" + strconv.FormatInt(splits[1].ID, 10))
+	resp, err = authedClient().Get(server.URL + "/api/shuffle?exclude=" + strconv.FormatInt(splits[1].ID, 10))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var tracks2 []shuffleTrack
@@ -241,7 +242,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	resp.Body.Close()
 
 	// The shuffle view fragment renders as a player queue.
-	resp, err = http.Get(server.URL + "/player/view?shuffle=1")
+	resp, err = authedClient().Get(server.URL + "/player/view?shuffle=1")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	fragBytes, err := io.ReadAll(resp.Body)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // defaultDBPath is the insecure CockroachDB connection used by the docker
@@ -148,10 +149,17 @@ func createSchema(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS song_plays (
 			split_id   INT PRIMARY KEY REFERENCES splits(id) ON DELETE CASCADE,
 			plays      INT NOT NULL DEFAULT 0,
-			rating     INT NOT NULL DEFAULT 0,
+			rating     STRING NOT NULL DEFAULT '',
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE INDEX IF NOT EXISTS idx_song_plays_plays ON song_plays(plays);
+
+		CREATE TABLE IF NOT EXISTS users (
+			id         INT PRIMARY KEY DEFAULT unique_rowid(),
+			name       STRING NOT NULL UNIQUE,
+			password   STRING NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	return err
 }
@@ -487,7 +495,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
-		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
 		 FROM splits s
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
 		 WHERE s.classification != $1 AND s.id != ALL($2::INT[])
@@ -529,19 +537,15 @@ func recordPlay(splitID int64) error {
 
 // setRating records a like, dislike, or (when rating is "") clears the rating
 // for a split. Existing play counts are preserved.
-func setRating(splitID int64, wasLiked bool) error {
+func setRating(splitID int64, rating string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	liked := 0
-	if wasLiked {
-		liked = 1
-	}
 	_, err := recordDB.Exec(
 		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 1, $2)
-		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + 1, updated_at = now()`,
-		splitID, liked,
+		 ON CONFLICT (split_id) DO UPDATE SET rating = $2, updated_at = now()`,
+		splitID, rating,
 	)
 	return err
 }
@@ -564,4 +568,56 @@ func fetchSongStats(splitID int64) (plays int, rating string, err error) {
 		return 0, "", err
 	}
 	return plays, rating, nil
+}
+
+// User is one row in the users table. Password holds the bcrypt hash of the
+// user's basic-auth password; it is never stored in plaintext.
+type User struct {
+	ID        int64
+	Name      string
+	Password  string
+}
+
+// fetchUserByName returns the user with the given name, or sql.ErrNoRows when
+// no such user exists.
+func fetchUserByName(name string) (User, error) {
+	if recordDB == nil {
+		return User{}, fmt.Errorf("nil db")
+	}
+
+	var u User
+	err := recordDB.QueryRow(
+		`SELECT id, name, password FROM users WHERE name = $1`,
+		name,
+	).Scan(&u.ID, &u.Name, &u.Password)
+	if err != nil {
+		return User{}, err
+	}
+	return u, nil
+}
+
+// createUser stores a new user with the given name and password. The password
+// is bcrypt-hashed before being written. It is an error if a user with the
+// same name already exists (the name column is unique).
+func createUser(name, password string) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	_, err = recordDB.Exec(
+		`INSERT INTO users (name, password) VALUES ($1, $2)`,
+		name, string(hash),
+	)
+	return err
+}
+
+// userPasswordMatches reports whether the given plaintext password matches the
+// stored bcrypt hash for the user.
+func userPasswordMatches(u User, password string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) == nil
 }
