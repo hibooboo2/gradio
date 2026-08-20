@@ -16,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	glog "github.com/hibooboo2/gradio/log"
-
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
+	glog "github.com/hibooboo2/gradio/log"
+	"github.com/schollz/progressbar/v3"
+	mpb "github.com/vbauerster/mpb/v8"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,7 +32,7 @@ const (
 )
 
 var urls = map[string]string{
-	// "GayPHXRadio": streamURL,
+	"GayPHXRadio": streamURL,
 	"RandomRadio": streamURL2,
 	"Slotex":      "https://s3.slotex.pl:7076/;",
 }
@@ -93,6 +94,8 @@ func main() {
 		watchAndSplit(ctx)
 		return nil
 	})
+
+	bar := mpb.New(mpb.WithWidth(70))
 
 	if *record {
 		for name, url := range urls {
@@ -201,9 +204,11 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 	}
 
 	buf := make([]byte, 64*1024)
-
+	bar := progressbar.New(int(rotateTime.Seconds()))
+	bar.Describe("Recording Radio: " + r.radioName)
 	currentLoop := time.Now()
 	for {
+		bar.Set(int(time.Since(currentLoop).Seconds()))
 		if time.Since(currentLoop) > rotateTime {
 			err = r.rotate()
 			if err != nil {

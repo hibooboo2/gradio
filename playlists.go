@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -222,11 +223,22 @@ type playerViewData struct {
 	Playlist  Playlist
 	Songs     []PlaylistSong
 	StartSong int64
+	// Subtitle overrides the default "Playlist · <name>" subtitle, e.g. for a
+	// radio which shows "Radio · <name>".
+	Subtitle string
+	// QueueKey uniquely identifies the loaded queue (e.g. "radio:Slotex" or
+	// "playlist:123") so the client can keep the currently playing queue when
+	// the view is re-rendered instead of restarting it.
+	QueueKey string
 }
+
+// radioQueueSize is how many random splits are loaded into a radio's queue.
+const radioQueueSize = 100
 
 var viewFuncs = template.FuncMap{
 	"musicURL":  musicURL,
 	"songTitle": songTitle,
+	"urlq":      url.QueryEscape,
 	"timeStr": func(seconds float64) string {
 		if seconds < 0 {
 			return "0:00"
@@ -244,7 +256,8 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 	<p>{{len .Playlists}} playlist{{if ne (len .Playlists) 1}}s{{end}} &mdash; built from the mp3 files in your splits</p>
 </div>
 
-<form class="create-form" hx-post="/playlists/create" hx-target="#content" hx-swap="innerHTML">
+<form class="create-form" hx-post="/playlists/create" hx-target="#content" hx-swap="innerHTML"
+		hx-push-url="/playlists">
 	<input type="text" name="name" placeholder="New playlist name" required maxlength="200">
 	<button type="submit">Create</button>
 </form>
@@ -255,7 +268,8 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 	{{$pl := .}}
 	<li class="surface playlist-item">
 		<div class="playlist-head"
-			hx-get="/playlists/view?expand={{.ID}}" hx-target="#content" hx-swap="innerHTML">
+			hx-get="/playlists/view?expand={{.ID}}" hx-target="#content" hx-swap="innerHTML"
+			hx-push-url="/playlists?expand={{.ID}}">
 			<div class="playlist-icon">&#9835;</div>
 			<div class="playlist-info">
 				<span class="playlist-name">{{.Name}}</span>
@@ -269,9 +283,10 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 			<div class="playlist-actions">
 				<button class="btn-play"
 					hx-get="/player/view?playlist={{.ID}}" hx-target="#content" hx-swap="innerHTML"
-					hx-push-url="/player" hx-on:click="selectTab('player', false)">&#9654; Play</button>
+					hx-push-url="/player?playlist={{.ID}}" hx-on:click="selectTab('player', false)">&#9654; Play</button>
 				<button class="btn-danger"
 					hx-post="/playlists/{{.ID}}/delete" hx-target="#content" hx-swap="innerHTML"
+					hx-push-url="/playlists"
 					hx-confirm="Delete playlist &quot;{{.Name}}&quot;? The mp3 files are kept.">&#128465; Delete</button>
 			</div>
 
@@ -283,7 +298,7 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 					<a class="song-play" href="/player?playlist={{$pl.ID}}&song={{.Split.ID}}"
 						title="Play"
 						hx-get="/player/view?playlist={{$pl.ID}}&song={{.Split.ID}}"
-						hx-target="#content" hx-swap="innerHTML" hx-push-url="/player"
+						hx-target="#content" hx-swap="innerHTML" hx-push-url="/player?playlist={{$pl.ID}}&song={{.Split.ID}}"
 						hx-on:click="selectTab('player', false)">&#9654;</a>
 					<div class="song-info">
 						<span class="song-title">{{songTitle .Split}}</span>
@@ -292,6 +307,7 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 					<button class="btn-remove" title="Remove from playlist"
 						hx-post="/playlists/{{$pl.ID}}/songs/{{.Split.ID}}/delete"
 						hx-target="#content" hx-swap="innerHTML"
+						hx-push-url="/playlists?expand={{$pl.ID}}"
 						hx-vals='{"expand": "{{$pl.ID}}"}'>&times;</button>
 				</li>
 				{{end}}
@@ -301,6 +317,7 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 			{{end}}
 
 			<form class="add-song-form" hx-post="/playlists/{{.ID}}/songs" hx-target="#content" hx-swap="innerHTML"
+				hx-push-url="/playlists?expand={{.ID}}"
 				hx-vals='{"expand": "{{.ID}}"}'>
 				<select name="split_id" required>
 					<option value="" disabled selected>Add an mp3 from the splits&hellip;</option>
@@ -321,13 +338,15 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 `))
 
 var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).Parse(`
-<div class="player-wrap" data-player-wrap>
+<div class="player-wrap" data-player-wrap
+	data-queue-key="{{.QueueKey}}"
+	data-start-split="{{.StartSong}}">
 	<section class="surface player-card">
 		<div class="player-cover" data-eq>
 			<span></span><span></span><span></span>
 		</div>
 		<p class="player-title" data-player-title>Nothing playing</p>
-		<p class="player-subtitle" data-player-subtitle>Playlist &middot; {{.Playlist.Name}}</p>
+		<p class="player-subtitle" data-player-subtitle>{{if .Subtitle}}{{.Subtitle}}{{else}}Playlist &middot; {{.Playlist.Name}}{{end}}</p>
 
 		<audio data-audio preload="metadata"></audio>
 
@@ -350,6 +369,20 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 		<div class="volume-row">
 			<button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>
 			<input type="range" data-player-volume min="0" max="1" step="0.01">
+		</div>
+
+		<div class="sleep-row">
+			<button type="button" class="icon-btn sleep-btn" data-player-sleep title="Sleep timer">&#127769;&#65039;</button>
+			<span class="sleep-remaining" data-sleep-remaining></span>
+			<div class="sleep-popup" data-sleep-popup hidden>
+				<div class="sleep-popup-title">Sleep timer</div>
+				<button type="button" data-sleep-min="5">5 min</button>
+				<button type="button" data-sleep-min="10">10 min</button>
+				<button type="button" data-sleep-min="15">15 min</button>
+				<button type="button" data-sleep-min="30">30 min</button>
+				<button type="button" data-sleep-min="60">60 min</button>
+				<button type="button" class="sleep-off" data-sleep-off>Off</button>
+			</div>
 		</div>
 	</section>
 
@@ -381,16 +414,38 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 </div>
 `))
 
-var playerEmptyTemplate = template.Must(template.New("playerEmpty").Parse(`
+var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFuncs).Parse(`
 <div class="player-empty surface">
 	<p class="empty-icon">&#9835;</p>
 	<p class="empty">Nothing is playing.</p>
-	<p class="empty-sub">Pick a playlist from the Play Lists tab to start listening.</p>
-	<button
+	<p class="empty-sub">Pick a playlist from the Play Lists tab, or start a radio below.</p>
+
+	{{if .Radios}}
+	<h3 class="radio-section-title">Radios</h3>
+	<ul class="radio-list">
+		{{range .Radios}}
+		<li class="radio-item">
+			<button
+				class="radio-play"
+				hx-get="/player/view?radio={{urlq .Name}}" hx-target="#content" hx-swap="innerHTML"
+				hx-push-url="/player?radio={{urlq .Name}}" hx-on:click="selectTab('player')"
+				title="Play radio {{.Name}}">&#9654; Play {{.Name}}</button>
+			<span class="radio-meta">{{.SplitCount}} split{{if ne .SplitCount 1}}s{{end}}</span>
+		</li>
+		{{end}}
+	</ul>
+	{{end}}
+
+	<button class="go-playlists"
 		hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML"
-		hx-push-url="/playlists" hx-on:click="selectTab('playlists', false)">Go to Play Lists</button>
+		hx-push-url="/playlists" hx-on:click="selectTab('playlists')">Go to Play Lists</button>
 </div>
 `))
+
+// playerEmptyData is the data model for the player empty state.
+type playerEmptyData struct {
+	Radios []Radio
+}
 
 // renderPlaylistsView executes the play lists fragment into w. The playlist
 // with id expand (if any) has its songs loaded and rendered inline.
@@ -534,14 +589,49 @@ func handleRemoveSong(w http.ResponseWriter, r *http.Request) {
 	renderPlaylistsView(w, r, id)
 }
 
-// handlePlayerView renders the player tab fragment for the playlist named by
-// the ?playlist=<id> query param. The optional ?song=<split id> query param
-// selects which track starts playing.
+// handlePlayerView renders the player tab fragment. It supports three modes:
+//
+//   - ?radio=<name>: play a queue of random splits from that radio
+//   - ?playlist=<id>: play a saved playlist, with optional ?song=<split id>
+//   - no params: the empty state, which lists available radios to start
 func handlePlayerView(w http.ResponseWriter, r *http.Request) {
+	if radio := r.URL.Query().Get("radio"); radio != "" {
+		splits, err := fetchRadioSplits(radio, radioQueueSize)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", radio)
+			http.Error(w, "failed to load radio", http.StatusInternalServerError)
+			return
+		}
+
+		songs := make([]PlaylistSong, 0, len(splits))
+		for i, s := range splits {
+			songs = append(songs, PlaylistSong{
+				SplitID:  s.ID,
+				Position: i,
+				Split:    s,
+			})
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := playerViewTemplate.Execute(w, playerViewData{
+			Playlist: Playlist{Name: radio},
+			Songs:    songs,
+			Subtitle: "Radio · " + radio,
+			QueueKey: "radio:" + radio,
+		}); err != nil {
+			slog.ErrorContext(r.Context(), "render player view", "err", err)
+		}
+		return
+	}
+
 	playlistID, err := strconv.ParseInt(r.URL.Query().Get("playlist"), 10, 64)
 	if err != nil || playlistID == 0 {
+		radios, rerr := fetchRadios()
+		if rerr != nil {
+			slog.ErrorContext(r.Context(), "list radios", "err", rerr)
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerEmptyTemplate.Execute(w, nil); err != nil {
+		if err := playerEmptyTemplate.Execute(w, playerEmptyData{Radios: radios}); err != nil {
 			slog.ErrorContext(r.Context(), "render player empty", "err", err)
 		}
 		return
@@ -550,8 +640,12 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	playlist, err := fetchPlaylist(playlistID)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			radios, rerr := fetchRadios()
+			if rerr != nil {
+				slog.ErrorContext(r.Context(), "list radios", "err", rerr)
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := playerEmptyTemplate.Execute(w, nil); err != nil {
+			if err := playerEmptyTemplate.Execute(w, playerEmptyData{Radios: radios}); err != nil {
 				slog.ErrorContext(r.Context(), "render player empty", "err", err)
 			}
 			return
@@ -580,6 +674,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		Playlist:  playlist,
 		Songs:     songs,
 		StartSong: startSplit,
+		QueueKey:  "playlist:" + strconv.FormatInt(playlistID, 10),
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "render player view", "err", err)
 	}
@@ -663,4 +758,15 @@ func handleListSongsJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, songs)
+}
+
+// handleListRadiosJSON returns the distinct radios with playable splits.
+func handleListRadiosJSON(w http.ResponseWriter, r *http.Request) {
+	radios, err := fetchRadios()
+	if err != nil {
+		slog.ErrorContext(r.Context(), "list radios", "err", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, radios)
 }

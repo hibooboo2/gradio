@@ -7,12 +7,32 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
+
+// TestPageURLsServeShell ensures the page URLs (/splits, /player, /playlists)
+// serve the htmx app shell so any view can be opened or reloaded directly,
+// including when query params carry the view state.
+func TestPageURLsServeShell(t *testing.T) {
+	mux := routes()
+	for _, path := range []string{
+		"/splits", "/player", "/playlists",
+		"/player?playlist=123&song=456",
+		"/playlists?expand=99",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "path %s: %s", path, rec.Body.String())
+		require.True(t, strings.Contains(rec.Body.String(), "data-tab"),
+			"path %s did not serve the app shell", path)
+	}
+}
 
 func TestRoutes(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
@@ -123,7 +143,7 @@ func TestRoutes(t *testing.T) {
 
 func listSplits(t *testing.T, baseURL string) []Split {
 	t.Helper()
-	resp, err := http.Get(baseURL + "/splits")
+	resp, err := http.Get(baseURL + "/api/splits")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)

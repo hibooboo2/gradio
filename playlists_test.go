@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +143,83 @@ func TestPlaylistsViewRenders(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "Nothing is playing")
+}
+
+// TestRadioPlayback ensures radios are listed and a radio plays a shuffled
+// queue of random splits from that radio.
+func TestRadioPlayback(t *testing.T) {
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	// Two radios, each with a couple of splits.
+	for _, radio := range []string{"RadioA", "RadioB"} {
+		recID, err := insertRecording("/tmp/radio-"+radio+".mp3", radio, time.Now(), 123)
+		require.NoError(t, err)
+		require.NoError(t, insertSplit(Split{
+			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
+			Index: 0, Start: 0, End: 100,
+			OutputPath: "split_music/" + radio + "/radio/output_00000.mp3",
+		}))
+		require.NoError(t, insertSplit(Split{
+			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
+			Index: 1, Start: 100, End: 200,
+			OutputPath: "split_music/" + radio + "/radio/output_00001.mp3",
+		}))
+	}
+
+	radios, err := fetchRadios()
+	require.NoError(t, err)
+	require.Len(t, radios, 2)
+	byName := map[string]int{}
+	for _, r := range radios {
+		byName[r.Name] = r.SplitCount
+	}
+	require.Equal(t, 2, byName["RadioA"])
+	require.Equal(t, 2, byName["RadioB"])
+
+	// Radio splits are random but limited to the queue size and only that radio.
+	splits, err := fetchRadioSplits("RadioA", 10)
+	require.NoError(t, err)
+	require.Len(t, splits, 2)
+	for _, s := range splits {
+		require.True(t, strings.Contains(s.OutputPath, "RadioA"), "unexpected radio split: %s", s.OutputPath)
+	}
+
+	mux := routes()
+
+	// Empty player state lists the radios with play buttons.
+	req := httptest.NewRequest(http.MethodGet, "/player/view", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "radio-play")
+	require.Contains(t, body, "RadioA")
+
+	// Radio mode renders a player queue and a radio subtitle.
+	req = httptest.NewRequest(http.MethodGet, "/player/view?radio=RadioA", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	playerBody := rec.Body.String()
+	require.Contains(t, playerBody, "data-audio")
+	require.Contains(t, playerBody, "data-player-queue")
+	require.Contains(t, playerBody, "Radio · RadioA")
+
+	// JSON endpoint lists radios.
+	req = httptest.NewRequest(http.MethodGet, "/api/radios", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "RadioA")
 }

@@ -440,6 +440,60 @@
 			height: 4px;
 		}
 
+		.sleep-row {
+			position: relative;
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
+			margin-top: 1.25rem;
+			width: 100%;
+			max-width: 16rem;
+			justify-content: center;
+		}
+		.sleep-btn { position: relative; }
+		.sleep-btn.active { color: var(--accent); background: rgba(99, 102, 241, 0.15); }
+		.sleep-remaining {
+			color: var(--accent);
+			font-size: 0.8rem;
+			font-variant-numeric: tabular-nums;
+		}
+		.sleep-popup {
+			position: absolute;
+			bottom: calc(100% + 0.5rem);
+			left: 50%;
+			transform: translateX(-50%);
+			background: var(--panel-2);
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 0.5rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.25rem;
+			width: 9rem;
+			z-index: 20;
+			box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+		}
+		.sleep-popup[hidden] { display: none; }
+		.sleep-popup-title {
+			font-size: 0.7rem;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: var(--muted);
+			padding: 0.25rem 0.5rem 0.25rem;
+		}
+		.sleep-popup button {
+			background: transparent;
+			color: var(--text);
+			border: none;
+			border-radius: 6px;
+			padding: 0.4rem 0.5rem;
+			font-size: 0.85rem;
+			text-align: left;
+			cursor: pointer;
+		}
+		.sleep-popup button:hover { background: rgba(99, 102, 241, 0.15); filter: none; }
+		.sleep-popup .sleep-off { color: var(--danger); }
+
 		.queue {
 			padding: 1.1rem;
 			max-height: 640px;
@@ -491,6 +545,125 @@
 
 		.player-empty { padding: 2.5rem; text-align: center; }
 		.player-empty button { margin-top: 0.75rem; }
+
+		.radio-section-title {
+			margin: 1.75rem 0 0.75rem;
+			font-size: 0.8rem;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: var(--muted);
+		}
+
+		.radio-list {
+			list-style: none;
+			margin: 0 0 1.25rem;
+			padding: 0;
+			display: flex;
+			flex-direction: column;
+			gap: 0.5rem;
+			max-width: 26rem;
+			margin-left: auto;
+			margin-right: auto;
+			text-align: left;
+		}
+		.radio-item {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.75rem;
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 0.6rem 0.9rem;
+		}
+		.radio-play {
+			background: transparent;
+			color: var(--accent-2);
+			border: 1px solid var(--accent-2);
+			border-radius: 999px;
+			padding: 0.4rem 1rem;
+			font-size: 0.85rem;
+			font-weight: 600;
+			flex-shrink: 0;
+		}
+		.radio-play:hover { background: rgba(16, 185, 129, 0.15); filter: none; }
+		.radio-meta { color: var(--muted); font-size: 0.8rem; }
+		.go-playlists { margin-top: 0.5rem; }
+
+		/* ---------- Mini player ---------- */
+		.mini-player {
+			position: fixed;
+			top: 1rem;
+			right: 1rem;
+			z-index: 100;
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 14px;
+			padding: 0.5rem 0.75rem 0.5rem 0.75rem;
+			box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+			max-width: 320px;
+		}
+		.mini-player[hidden] { display: none; }
+		.mini-body {
+			background: transparent;
+			border: none;
+			color: var(--text);
+			padding: 0;
+			text-align: left;
+			cursor: pointer;
+			flex: 1;
+			min-width: 0;
+			position: relative;
+		}
+		.mini-body:hover { filter: none; }
+		.mini-text { display: flex; flex-direction: column; min-width: 0; }
+		.mini-title {
+			font-size: 0.85rem;
+			font-weight: 600;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 12rem;
+		}
+		.mini-source {
+			font-size: 0.72rem;
+			color: var(--muted);
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 12rem;
+		}
+		.mini-sleep { display: none; position: absolute; top: -0.25rem; right: -0.25rem; font-size: 0.8rem; }
+		.mini-sleep.active { display: inline; }
+		.mini-progress {
+			height: 3px;
+			border-radius: 999px;
+			background: rgba(255, 255, 255, 0.1);
+			overflow: hidden;
+			margin-top: 0.35rem;
+			width: 100%;
+		}
+		.mini-progress-fill {
+			height: 100%;
+			width: 0%;
+			background: var(--accent);
+		}
+		.mini-controls { display: flex; align-items: center; gap: 0.25rem; }
+		.mini-play {
+			width: 2.5rem;
+			height: 2.5rem;
+			border-radius: 50%;
+			background: var(--accent);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			font-size: 1rem;
+		}
+		.mini-close { font-size: 0.9rem; }
 	</style>
 </head>
 <body>
@@ -515,13 +688,36 @@
 			<button hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML"
 				hx-disabled-elt="this">Refresh</button>
 		</div>
-		<div id="content" hx-get="/splits/view" hx-trigger="load" hx-swap="innerHTML">
+		<div id="content">
 			<p class="empty">Loading…</p>
 		</div>
 	</main>
+
+	<!-- Persistent mini player: lives outside #content so it survives htmx
+	     navigation and keeps playing when you switch views. -->
+	<div id="mini-player" class="mini-player" hidden>
+		<button id="mini-body" class="mini-body" title="Open player">
+			<div class="mini-text">
+				<span id="mini-title" class="mini-title">Nothing playing</span>
+				<span id="mini-source" class="mini-source"></span>
+			</div>
+			<span id="mini-sleep" class="mini-sleep" title="Sleep timer active">🌙</span>
+			<div class="mini-progress"><div id="mini-progress-fill" class="mini-progress-fill"></div></div>
+		</button>
+		<div class="mini-controls">
+			<button id="mini-prev" class="icon-btn" title="Previous">&#9198;&#65039;</button>
+			<button id="mini-toggle" class="mini-play" title="Play/Pause">&#9654;&#65039;</button>
+			<button id="mini-next" class="icon-btn" title="Next">&#9197;&#65039;</button>
+			<button id="mini-close" class="icon-btn mini-close" title="Close player">&#10005;</button>
+		</div>
+	</div>
+
 	<script>
 		// ---------- Tab navigation ----------
-		function selectTab(name, load) {
+		// selectTab only updates the active tab + page header. The actual view
+		// loading is handled by the tab buttons' own hx-get/hx-push-url for
+		// clicks, and by loadViewFromURL for direct loads and back/forward.
+		function selectTab(name) {
 			const tab = document.querySelector('.tab[data-tab="' + name + '"]');
 			if (!tab) return;
 			document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -529,76 +725,68 @@
 			document.getElementById('page-title').textContent = tab.dataset.title;
 			document.getElementById('page-subtitle').textContent = tab.dataset.subtitle;
 			document.getElementById('controls').style.display = tab.dataset.controls === 'true' ? '' : 'none';
-			if (load === undefined || load) {
-				htmx.ajax('GET', tab.getAttribute('hx-get'), '#content');
+		}
+
+		// Load the view that matches the current URL. The fragment endpoints
+		// (/splits/view, /player/view, /playlists/view) are fetched but never
+		// shown in the address bar; the page URLs carry the view + any state
+		// (e.g. ?playlist=..&song=.. or ?expand=..) needed to reopen it.
+		function loadViewFromURL() {
+			const path = window.location.pathname;
+			let tab, frag;
+			if (path.startsWith('/player')) {
+				tab = 'player';
+				frag = '/player/view' + window.location.search;
+			} else if (path.startsWith('/playlists')) {
+				tab = 'playlists';
+				frag = '/playlists/view' + window.location.search;
+			} else {
+				tab = 'splits';
+				frag = '/splits/view';
 			}
+			selectTab(tab);
+			htmx.ajax('GET', frag, '#content');
 		}
 
-		function tabFromPath() {
-			const p = window.location.pathname;
-			if (p.startsWith('/player')) return 'player';
-			if (p.startsWith('/playlists')) return 'playlists';
-			return 'splits';
-		}
+		document.addEventListener('DOMContentLoaded', loadViewFromURL);
+		window.addEventListener('popstate', loadViewFromURL);
 
-		document.addEventListener('DOMContentLoaded', () => {
-			// The #content div auto-loads /splits/view via hx-trigger="load" on a
-			// fresh page; when arriving on a sub-route pick the matching tab instead.
-			if (window.location.pathname !== '/' && window.location.pathname !== '/splits') {
-				const name = tabFromPath();
-				selectTab(name, true);
-			}
-		});
+		// ---------- Audio player (global singleton) ----------
+		// The audio element and all playback state live here, outside the
+		// swapped #content div, so music keeps playing while navigating between
+		// views. A persistent mini player shows in the top-right corner when a
+		// queue is loaded.
 
-		// ---------- Audio player ----------
-		function fmtTime(s) {
-			if (!isFinite(s) || s < 0) return '0:00';
-			const t = Math.floor(s);
-			const m = Math.floor(t / 60);
-			const ss = t % 60;
-			return m + ':' + String(ss).padStart(2, '0');
-		}
+		const Player = (() => {
+			const audio = new Audio();
+			audio.preload = 'metadata';
+			document.body.appendChild(audio);
+			audio.style.display = 'none';
 
-		function initPlayer(root) {
-			const audio = root.querySelector('[data-audio]');
-			if (!audio || root.dataset.playerReady) return;
-			root.dataset.playerReady = '1';
+			const VOLUME_KEY = 'gradio-player-volume';
+			audio.volume = parseFloat(localStorage.getItem(VOLUME_KEY) || '0.85');
 
-			const queue = [...root.querySelectorAll('[data-player-track]')].map(li => ({
-				src: li.getAttribute('data-src'),
-				title: li.getAttribute('data-title'),
-				el: li,
-			}));
-
-			const titleEl = root.querySelector('[data-player-title]');
-			const timeEl = root.querySelector('[data-time]');
-			const durEl = root.querySelector('[data-duration]');
-			const fillEl = root.querySelector('[data-progress-fill]');
-			const bar = root.querySelector('[data-progress-bar]');
-			const toggleBtn = root.querySelector('[data-player-toggle]');
-			const prevBtn = root.querySelector('[data-player-prev]');
-			const nextBtn = root.querySelector('[data-player-next]');
-			const shuffleBtn = root.querySelector('[data-player-shuffle]');
-			const repeatBtn = root.querySelector('[data-player-repeat]');
-			const muteBtn = root.querySelector('[data-player-mute]');
-			const volInput = root.querySelector('[data-player-volume]');
-			const eq = root.querySelector('[data-eq]');
-
+			let queue = [];
 			let index = -1;
 			let shuffle = false;
 			let repeat = 'off';
 			let shuffleOrder = [];
-			const VOLUME_KEY = 'gradio-player-volume';
+			let queueKey = '';
+			let source = '';
+			let pageURL = '/player';
+			let sleepEndsAt = null;
+			let sleepInterval = null;
 
-			function setTitles() {
-				if (titleEl && queue[index]) titleEl.textContent = queue[index].title;
+			function fmtTime(s) {
+				if (!isFinite(s) || s < 0) return '0:00';
+				const t = Math.floor(s);
+				const m = Math.floor(t / 60);
+				const ss = t % 60;
+				return m + ':' + String(ss).padStart(2, '0');
 			}
 
-			function updateUI() {
-				queue.forEach((t, i) => t.el.classList.toggle('active', i === index));
-				const playing = !audio.paused && !audio.ended;
-				if (toggleBtn) toggleBtn.textContent = playing ? '⏸️' : '▶️';
-				if (eq) eq.classList.toggle('playing', playing);
+			function current() {
+				return (index >= 0 && index < queue.length) ? queue[index] : null;
 			}
 
 			function buildShuffle() {
@@ -634,84 +822,363 @@
 			function playAt(i) {
 				if (i < 0 || i >= queue.length) return;
 				index = i;
-				audio.src = queue[i].src;
+				const t = queue[i];
+				audio.src = t.src;
 				audio.currentTime = 0;
 				audio.play().catch(() => {});
-				setTitles();
-				updateUI();
+				renderAll();
 			}
 
-			function next() { const i = nextIdx(); if (i < 0) { audio.pause(); } else playAt(i); }
+			function next() { const i = nextIdx(); if (i < 0) { audio.pause(); renderAll(); } else playAt(i); }
 			function prev() {
 				if (audio.currentTime > 3) { audio.currentTime = 0; return; }
 				const i = prevIdx();
 				if (i >= 0) playAt(i);
 			}
 
-			audio.addEventListener('timeupdate', () => {
-				if (timeEl) timeEl.textContent = fmtTime(audio.currentTime);
-				if (fillEl && audio.duration) fillEl.style.width = (audio.currentTime / audio.duration * 100) + '%';
-			});
-			audio.addEventListener('loadedmetadata', () => {
-				if (durEl) durEl.textContent = fmtTime(audio.duration);
-			});
-			audio.addEventListener('play', updateUI);
-			audio.addEventListener('pause', updateUI);
 			audio.addEventListener('ended', () => {
 				if (repeat === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); return; }
 				next();
 			});
+			audio.addEventListener('play', renderAll);
+			audio.addEventListener('pause', renderAll);
+			audio.addEventListener('timeupdate', renderAll);
+			audio.addEventListener('loadedmetadata', renderAll);
+			audio.addEventListener('durationchange', renderAll);
 
-			if (toggleBtn) toggleBtn.addEventListener('click', () => {
+			function loadQueue(tracks, opts) {
+				opts = opts || {};
+				queue = tracks || [];
+				queueKey = opts.queueKey || '';
+				source = opts.source || '';
+				pageURL = queuePageURL(queueKey);
+				index = (typeof opts.startIndex === 'number') ? opts.startIndex : 0;
+				if (index < 0 || index >= queue.length) index = 0;
+				if (shuffle) buildShuffle();
+				if (queue.length > 0) {
+					audio.src = queue[index].src;
+					audio.currentTime = 0;
+				}
+				renderAll();
+			}
+
+			// Reconstruct the page URL for a queue key so the mini player can
+			// reopen the view that is actually playing.
+			function queuePageURL(key) {
+				if (key && key.indexOf('radio:') === 0) {
+					return '/player?radio=' + encodeURIComponent(key.slice('radio:'.length));
+				}
+				if (key && key.indexOf('playlist:') === 0) {
+					return '/player?playlist=' + encodeURIComponent(key.slice('playlist:'.length));
+				}
+				return '/player';
+			}
+
+			function clearQueue() {
+				audio.pause();
+				audio.removeAttribute('src');
+				queue = [];
+				index = -1;
+				queueKey = '';
+				source = '';
+				pageURL = '/player';
+				stopSleep();
+				renderAll();
+			}
+
+			function toggle() {
 				if (queue.length === 0) return;
 				if (audio.paused) audio.play().catch(() => {}); else audio.pause();
-			});
-			if (nextBtn) nextBtn.addEventListener('click', next);
-			if (prevBtn) prevBtn.addEventListener('click', prev);
-			if (shuffleBtn) shuffleBtn.addEventListener('click', () => {
-				shuffle = !shuffle;
-				if (shuffle) buildShuffle();
-				shuffleBtn.classList.toggle('active', shuffle);
-			});
-			if (repeatBtn) repeatBtn.addEventListener('click', () => {
+			}
+
+			function setShuffle(v) { shuffle = !!v; if (shuffle) buildShuffle(); renderAll(); }
+			function toggleShuffle() { setShuffle(!shuffle); }
+			function setRepeat(m) { repeat = m; renderAll(); }
+			function cycleRepeat() {
 				const order = ['off', 'all', 'one'];
 				repeat = order[(order.indexOf(repeat) + 1) % order.length];
-				repeatBtn.classList.toggle('active', repeat !== 'off');
-				repeatBtn.textContent = repeat === 'one' ? '🔂' : '🔁';
+				renderAll();
+			}
+			function setVolume(v) {
+				const c = Math.max(0, Math.min(1, v));
+				audio.volume = c;
+				localStorage.setItem(VOLUME_KEY, String(c));
+				renderAll();
+			}
+			function toggleMute() { audio.muted = !audio.muted; renderAll(); }
+
+			function fmtSleepRemaining(ms) {
+				const total = Math.max(0, Math.ceil(ms / 1000));
+				const m = Math.floor(total / 60);
+				const s = total % 60;
+				return m + ':' + String(s).padStart(2, '0');
+			}
+			function stopSleep() {
+				if (sleepInterval) { clearInterval(sleepInterval); sleepInterval = null; }
+				sleepEndsAt = null;
+				renderAll();
+			}
+			function startSleep(minutes) {
+				stopSleep();
+				sleepEndsAt = Date.now() + minutes * 60000;
+				sleepInterval = setInterval(() => {
+					if (sleepEndsAt === null) { stopSleep(); return; }
+					if (sleepEndsAt - Date.now() <= 0) {
+						audio.pause();
+						stopSleep();
+						return;
+					}
+					renderAll();
+				}, 1000);
+				renderAll();
+			}
+
+			return {
+				get audio() { return audio; },
+				get queue() { return queue; },
+				get queueKey() { return queueKey; },
+				get source() { return source; },
+				get pageURL() { return pageURL; },
+				get index() { return index; },
+				get hasQueue() { return queue.length > 0; },
+				get isPlaying() { return !audio.paused && !audio.ended; },
+				get shuffle() { return shuffle; },
+				get repeat() { return repeat; },
+				get muted() { return audio.muted; },
+				get volume() { return audio.volume; },
+				get current() { return current(); },
+				get sleepActive() { return sleepEndsAt !== null; },
+				get sleepRemaining() { return sleepEndsAt === null ? 0 : Math.max(0, sleepEndsAt - Date.now()); },
+				fmtTime,
+				loadQueue,
+				clearQueue,
+				playAt,
+				play() { if (queue.length && audio.paused) audio.play().catch(() => {}); },
+				pause() { audio.pause(); },
+				toggle,
+				next,
+				prev,
+				toggleShuffle,
+				setShuffle,
+				cycleRepeat,
+				setVolume,
+				toggleMute,
+				startSleep,
+				stopSleep,
+			};
+		})();
+
+		// ---------- Mini player ----------
+		const miniPlayer = document.getElementById('mini-player');
+		const miniTitle = document.getElementById('mini-title');
+		const miniSource = document.getElementById('mini-source');
+		const miniToggle = document.getElementById('mini-toggle');
+		const miniPrev = document.getElementById('mini-prev');
+		const miniNext = document.getElementById('mini-next');
+		const miniClose = document.getElementById('mini-close');
+		const miniBody = document.getElementById('mini-body');
+		const miniProgressFill = document.getElementById('mini-progress-fill');
+		const miniSleep = document.getElementById('mini-sleep');
+
+		if (miniToggle) miniToggle.addEventListener('click', (e) => { e.stopPropagation(); Player.toggle(); });
+		if (miniPrev) miniPrev.addEventListener('click', (e) => { e.stopPropagation(); Player.prev(); });
+		if (miniNext) miniNext.addEventListener('click', (e) => { e.stopPropagation(); Player.next(); });
+		if (miniClose) miniClose.addEventListener('click', (e) => {
+			e.stopPropagation();
+			Player.clearQueue();
+		});
+		if (miniBody) miniBody.addEventListener('click', (e) => {
+			e.stopPropagation();
+			const url = Player.pageURL;
+			if (history.state && history.state.__gradio === url) {
+				history.replaceState({ __gradio: url }, '', url);
+			} else {
+				history.pushState({ __gradio: url }, '', url);
+			}
+			loadViewFromURL();
+		});
+
+		// ---------- Full player view binding ----------
+		// Called whenever a player fragment is swapped in. Loads the queue into
+		// the singleton unless the same queue is already playing (so re-rendering
+		// the view does not restart playback), then wires the view's controls.
+		function bindFullPlayer(root) {
+			const wrap = root.querySelector('[data-player-wrap]') || root;
+			if (!wrap || !wrap.querySelector('[data-audio]')) return;
+
+			const queueKey = wrap.getAttribute('data-queue-key') || '';
+			const startSplit = wrap.getAttribute('data-start-split') || '';
+			const tracks = [...wrap.querySelectorAll('[data-player-track]')].map(li => ({
+				src: li.getAttribute('data-src'),
+				title: li.getAttribute('data-title'),
+				split: li.getAttribute('data-split'),
+				el: li,
+			}));
+
+			// If the same queue is already loaded and there is no explicit
+			// request to start a different song, keep the current position.
+			if (Player.hasQueue && Player.queueKey === queueKey) {
+				const cur = Player.current();
+				const wantStart = startSplit && (!cur || String(cur.split) !== String(startSplit));
+				if (!wantStart) {
+					syncFullView(wrap);
+					return;
+				}
+			}
+
+			const startIndex = tracks.findIndex(t => t.split && String(t.split) === String(startSplit));
+			Player.loadQueue(tracks, {
+				queueKey: queueKey,
+				startIndex: startIndex >= 0 ? startIndex : 0,
+				source: (wrap.querySelector('[data-player-subtitle]') || {}).textContent || '',
 			});
+		}
+
+		// Render the current Player state into the full player view, if present.
+		function syncFullView(wrap) {
+			const titleEl = wrap.querySelector('[data-player-title]');
+			const subtitleEl = wrap.querySelector('[data-player-subtitle]');
+			const timeEl = wrap.querySelector('[data-time]');
+			const durEl = wrap.querySelector('[data-duration]');
+			const fillEl = wrap.querySelector('[data-progress-fill]');
+			const bar = wrap.querySelector('[data-progress-bar]');
+			const toggleBtn = wrap.querySelector('[data-player-toggle]');
+			const shuffleBtn = wrap.querySelector('[data-player-shuffle]');
+			const repeatBtn = wrap.querySelector('[data-player-repeat]');
+			const muteBtn = wrap.querySelector('[data-player-mute]');
+			const volInput = wrap.querySelector('[data-player-volume]');
+			const eq = wrap.querySelector('[data-eq]');
+			const sleepBtn = wrap.querySelector('[data-player-sleep]');
+			const sleepRemaining = wrap.querySelector('[data-sleep-remaining]');
+
+			const cur = Player.current();
+			const playing = Player.isPlaying;
+
+			if (titleEl) titleEl.textContent = cur ? cur.title : 'Nothing playing';
+			if (subtitleEl && !wrap.dataset.subtitleFixed) {
+				subtitleEl.textContent = Player.source || 'Playlist';
+			}
+
+			const activeEl = wrap.querySelector('[data-player-track].active');
+			if (activeEl) activeEl.classList.remove('active');
+			const items = wrap.querySelectorAll('[data-player-track]');
+			if (Player.index >= 0 && items[Player.index]) items[Player.index].classList.add('active');
+
+			if (toggleBtn) toggleBtn.textContent = playing ? '⏸️' : '▶️';
+			if (eq) eq.classList.toggle('playing', playing);
+			if (shuffleBtn) shuffleBtn.classList.toggle('active', Player.shuffle);
+			if (repeatBtn) {
+				repeatBtn.classList.toggle('active', Player.repeat !== 'off');
+				repeatBtn.textContent = Player.repeat === 'one' ? '🔂' : '🔁';
+			}
+			if (muteBtn) muteBtn.textContent = Player.muted ? '🔇' : '🔊';
+			if (volInput) volInput.value = Player.muted ? 0 : Player.volume;
+
+			if (timeEl) timeEl.textContent = Player.fmtTime(Player.audio.currentTime);
+			if (durEl) durEl.textContent = Player.fmtTime(Player.audio.duration);
+			if (fillEl && bar) {
+				const pct = Player.audio.duration ? (Player.audio.currentTime / Player.audio.duration * 100) : 0;
+				fillEl.style.width = pct + '%';
+			}
+
+			if (sleepBtn) sleepBtn.classList.toggle('active', Player.sleepActive);
+			if (sleepRemaining) {
+				sleepRemaining.textContent = Player.sleepActive ? '🌙 ' + Player.fmtTime(Player.sleepRemaining / 1000) : '';
+			}
+		}
+
+		// Bind the full player view's controls to the singleton.
+		function bindFullControls(wrap) {
+			const toggleBtn = wrap.querySelector('[data-player-toggle]');
+			const prevBtn = wrap.querySelector('[data-player-prev]');
+			const nextBtn = wrap.querySelector('[data-player-next]');
+			const shuffleBtn = wrap.querySelector('[data-player-shuffle]');
+			const repeatBtn = wrap.querySelector('[data-player-repeat]');
+			const muteBtn = wrap.querySelector('[data-player-mute]');
+			const volInput = wrap.querySelector('[data-player-volume]');
+			const bar = wrap.querySelector('[data-progress-bar]');
+			const sleepBtn = wrap.querySelector('[data-player-sleep]');
+			const sleepPopup = wrap.querySelector('[data-sleep-popup]');
+
+			if (toggleBtn) toggleBtn.addEventListener('click', () => Player.toggle());
+			if (prevBtn) prevBtn.addEventListener('click', () => Player.prev());
+			if (nextBtn) nextBtn.addEventListener('click', () => Player.next());
+			if (shuffleBtn) shuffleBtn.addEventListener('click', () => Player.toggleShuffle());
+			if (repeatBtn) repeatBtn.addEventListener('click', () => Player.cycleRepeat());
+			if (muteBtn) muteBtn.addEventListener('click', () => Player.toggleMute());
+			if (volInput) volInput.addEventListener('input', () => Player.setVolume(parseFloat(volInput.value)));
 			if (bar) bar.addEventListener('click', (e) => {
-				if (!audio.duration) return;
+				if (!Player.audio.duration) return;
 				const r = bar.getBoundingClientRect();
-				audio.currentTime = audio.duration * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+				Player.audio.currentTime = Player.audio.duration * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+				renderAll();
 			});
-			if (volInput) {
-				volInput.value = localStorage.getItem(VOLUME_KEY) || '0.85';
-				audio.volume = parseFloat(volInput.value);
-				volInput.addEventListener('input', () => {
-					audio.volume = parseFloat(volInput.value);
-					localStorage.setItem(VOLUME_KEY, volInput.value);
+			wrap.querySelectorAll('[data-player-track]').forEach((li, i) => {
+				li.addEventListener('click', () => Player.playAt(i));
+			});
+			if (sleepBtn) sleepBtn.addEventListener('click', () => {
+				if (sleepPopup) sleepPopup.hidden = !sleepPopup.hidden;
+			});
+			if (sleepPopup) {
+				sleepPopup.querySelectorAll('[data-sleep-min]').forEach(btn => {
+					btn.addEventListener('click', () => {
+						Player.startSleep(parseInt(btn.getAttribute('data-sleep-min'), 10));
+						sleepPopup.hidden = true;
+					});
+				});
+				const offBtn = sleepPopup.querySelector('[data-sleep-off]');
+				if (offBtn) offBtn.addEventListener('click', () => {
+					Player.stopSleep();
+					sleepPopup.hidden = true;
 				});
 			}
-			if (muteBtn) muteBtn.addEventListener('click', () => {
-				audio.muted = !audio.muted;
-				muteBtn.textContent = audio.muted ? '🔇' : '🔊';
-			});
-			queue.forEach((t, i) => t.el.addEventListener('click', () => playAt(i)));
+		}
 
-			if (queue.length > 0) {
-				index = queue.findIndex(t => t.el.classList.contains('active'));
-				if (index < 0) index = 0;
-				audio.src = queue[index].src;
-				setTitles();
-				updateUI();
+		// Render all surfaces (mini + full view) from the current Player state.
+		function renderAll() {
+			// mini player
+			if (miniPlayer) {
+				if (Player.hasQueue) {
+					miniPlayer.hidden = false;
+					const cur = Player.current();
+					if (miniTitle) miniTitle.textContent = cur ? cur.title : 'Nothing playing';
+					if (miniSource) miniSource.textContent = Player.source || '';
+					if (miniToggle) miniToggle.textContent = Player.isPlaying ? '⏸️' : '▶️';
+					if (miniProgressFill) {
+						const pct = Player.audio.duration ? (Player.audio.currentTime / Player.audio.duration * 100) : 0;
+						miniProgressFill.style.width = pct + '%';
+					}
+					if (miniSleep) miniSleep.classList.toggle('active', Player.sleepActive);
+				} else {
+					miniPlayer.hidden = true;
+				}
 			}
+			// full player view, if present
+			const wrap = document.querySelector('[data-player-wrap]');
+			if (wrap) syncFullView(wrap);
 		}
 
 		document.body.addEventListener('htmx:afterSwap', (e) => {
 			const target = e.detail && e.detail.target;
-			if (target && target.querySelector && target.querySelector('[data-audio]')) {
-				initPlayer(target);
+			if (!target || !target.querySelector) return;
+			if (target.querySelector('[data-player-wrap]')) {
+				bindFullPlayer(target);
+				const wrap = target.querySelector('[data-player-wrap]');
+				if (wrap) {
+					bindFullControls(wrap);
+					syncFullView(wrap);
+				}
 			}
+		});
+
+		// Close any open sleep timer popup when clicking outside of it.
+		document.addEventListener('click', (e) => {
+			document.querySelectorAll('[data-sleep-popup]:not([hidden])').forEach(popup => {
+				const row = popup.closest('.sleep-row');
+				const btn = row && row.querySelector('[data-player-sleep]');
+				if (btn && (btn.contains(e.target) || popup.contains(e.target))) return;
+				popup.hidden = true;
+			});
 		});
 	</script>
 </body>

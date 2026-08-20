@@ -385,3 +385,75 @@ func fetchAllRecordings() ([]Recording, error) {
 
 	return recs, rows.Err()
 }
+
+// Radio is one distinct radio that has split files, plus the number of splits
+// available for it.
+type Radio struct {
+	Name       string
+	SplitCount int
+}
+
+// fetchRadios returns the distinct radios that have at least one split, with
+// their split counts, ordered by name. The radio name comes from the
+// recordings table, which is set when a source stream is saved.
+func fetchRadios() ([]Radio, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT r.radio, count(s.id)
+		 FROM recordings r
+		 JOIN splits s ON s.recording_id = r.id
+		 GROUP BY r.radio
+		 ORDER BY r.radio ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var radios []Radio
+	for rows.Next() {
+		var radio Radio
+		if err := rows.Scan(&radio.Name, &radio.SplitCount); err != nil {
+			return nil, err
+		}
+		radios = append(radios, radio)
+	}
+
+	return radios, rows.Err()
+}
+
+// fetchRadioSplits returns up to limit random splits belonging to the given
+// radio, in random order, so a radio can be "played" as a shuffled queue.
+func fetchRadioSplits(radio string, limit int) ([]Split, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
+		 FROM splits s
+		 JOIN recordings r ON r.id = s.recording_id
+		 WHERE r.radio = $1
+		 ORDER BY random()
+		 LIMIT $2`,
+		radio, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var splits []Split
+	for rows.Next() {
+		var s Split
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
+			return nil, err
+		}
+		splits = append(splits, s)
+	}
+
+	return splits, rows.Err()
+}

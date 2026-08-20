@@ -39,20 +39,33 @@ func serveAPI(ctx context.Context, addr string) error {
 
 // routes returns the HTTP handler for the management API and web app.
 //
-//	GET    /splits                 list all splits
-//	GET    /splits/{id}            get one split
-//	PATCH  /splits/{id}            update a split's start, end, and/or classification
-//	GET    /recordings             list all recordings
-//	GET    /playlists              list playlists (JSON)
-//	GET    /playlists/{id}         get one playlist with its songs (JSON)
-//	GET    /api/songs              list all splits available as songs (JSON)
-//	GET    /music/{path...}        serve a split output file from split_music/
+// Page URLs (serve the htmx app shell; these are safe to navigate to directly
+// and appear in the browser address bar):
 //
-// The htmx web fragments are:
+//	GET    /splits                splits view
+//	GET    /player                player view
+//	GET    /playlists             play lists view
+//
+// JSON API backed directly by the cockroach tables:
+//
+//	GET    /api/splits            list all splits
+//	GET    /api/playlists         list playlists
+//	GET    /api/playlists/{id}    get one playlist with its songs
+//	GET    /api/songs             list all splits available as songs
+//	GET    /api/radios            list radios with playable splits
+//
+// Splits/recordings detail API:
+//
+//	GET    /splits/{id}           get one split
+//	PATCH  /splits/{id}           update a split's start, end, and/or classification
+//	GET    /recordings            list all recordings
+//	GET    /music/{path...}       serve a split output file from split_music/
+//
+// The htmx fragments (fetched by the UI; never shown in the address bar):
 //
 //	GET    /splits/view            splits tab fragment
 //	GET    /playlists/view         play lists tab fragment
-//	GET    /player/view            player tab fragment
+//	GET    /player/view            player tab fragment (?playlist=.. or ?radio=..)
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
@@ -60,11 +73,25 @@ func serveAPI(ctx context.Context, addr string) error {
 func routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /splits", handleListSplits)
+	// Page URLs serve the app shell so any view can be opened (or reloaded)
+	// directly from the address bar.
+	mux.HandleFunc("GET /splits", serveIndex)
+	mux.HandleFunc("GET /player", serveIndex)
+	mux.HandleFunc("GET /playlists", serveIndex)
+
+	// JSON API backed directly by the cockroach tables.
+	mux.HandleFunc("GET /api/splits", handleListSplits)
+	mux.HandleFunc("GET /api/playlists", handleListPlaylistsJSON)
+	mux.HandleFunc("GET /api/playlists/{id}", handleGetPlaylistJSON)
+	mux.HandleFunc("GET /api/songs", handleListSongsJSON)
+	mux.HandleFunc("GET /api/radios", handleListRadiosJSON)
+
+	// Splits/recordings detail API.
 	mux.HandleFunc("GET /splits/{id}", handleGetSplit)
 	mux.HandleFunc("PATCH /splits/{id}", handleUpdateSplit)
 	mux.HandleFunc("GET /recordings", handleListRecordings)
 
+	// htmx fragments.
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
 	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
 	mux.HandleFunc("GET /player/view", handlePlayerView)
@@ -74,11 +101,6 @@ func routes() *http.ServeMux {
 	mux.HandleFunc("POST /playlists/{id}/songs", handleAddSong)
 	mux.HandleFunc("POST /playlists/{id}/songs/{split_id}/delete", handleRemoveSong)
 
-	// Simple JSON API backed directly by the cockroach tables.
-	mux.HandleFunc("GET /api/playlists", handleListPlaylistsJSON)
-	mux.HandleFunc("GET /api/playlists/{id}", handleGetPlaylistJSON)
-	mux.HandleFunc("GET /api/songs", handleListSongsJSON)
-
 	// Serve the mp3 output files from split_music/ for the player.
 	mux.HandleFunc("GET /music/{path...}", handleMusic)
 
@@ -86,6 +108,12 @@ func routes() *http.ServeMux {
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
 	return mux
+}
+
+// serveIndex serves the htmx app shell so the page URLs work when opened or
+// reloaded directly, letting the client-side router load the matching view.
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join("web", "index.html"))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
