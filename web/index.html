@@ -1229,6 +1229,8 @@
 			const sleepRemaining = wrap.querySelector('[data-sleep-remaining]');
 			const commercialBtn = wrap.querySelector('[data-player-commercial]');
 			const songBtn = wrap.querySelector('[data-player-song]');
+			const mergePrevBtn = wrap.querySelector('[data-player-merge-prev]');
+			const mergeNextBtn = wrap.querySelector('[data-player-merge-next]');
 			const rateBtns = wrap.querySelectorAll('[data-player-rate]');
 
 			const cur = Player.current();
@@ -1267,6 +1269,8 @@
 			}
 			if (commercialBtn) commercialBtn.disabled = !Player.hasQueue;
 			if (songBtn) songBtn.disabled = !Player.hasQueue;
+			if (mergePrevBtn) mergePrevBtn.disabled = !Player.hasQueue;
+			if (mergeNextBtn) mergeNextBtn.disabled = !Player.hasQueue;
 			// Rating is a numeric like count; reflect it on the like button.
 			rateBtns.forEach(btn => {
 				if (btn.getAttribute('data-rating') === 'like') {
@@ -1305,6 +1309,40 @@
 			});
 		}
 
+		// Merge the currently playing split with its neighbor (prev=true joins
+		// the previous split on to it; prev=false joins the next split on to
+		// it), marking both source splits re_split and creating one merged
+		// split. Shows a brief green success state on the button that was
+		// clicked and reports errors in the resplit status line.
+		function bindMergeButton(wrap, btn, prev, doneLabel) {
+			btn.addEventListener('click', async () => {
+				const cur = Player.current();
+				if (!cur || !cur.split) return;
+				const label = btn.textContent;
+				const statusEl = wrap.querySelector('[data-resplit-status]');
+				if (statusEl) { statusEl.textContent = 'Merging…'; statusEl.hidden = false; }
+				try {
+					const res = await fetch('/api/splits/' + cur.split + '/merge', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ direction: prev ? 'prev' : 'next' }),
+					});
+					if (!res.ok) {
+						const data = await res.json().catch(() => ({}));
+						if (statusEl) statusEl.textContent = (data && data.error) ? data.error : 'Failed to merge';
+						return;
+					}
+					if (statusEl) statusEl.textContent = 'Merged — refresh the playlist to hear the combined track.';
+					btn.textContent = doneLabel;
+					btn.classList.add('success');
+					setTimeout(() => {
+						btn.textContent = label;
+						btn.classList.remove('success');
+					}, 2000);
+				} catch (err) { if (statusEl) statusEl.textContent = 'Failed to merge'; }
+			});
+		}
+
 		// Bind the full player view's controls to the singleton.
 		function bindFullControls(wrap) {
 			const toggleBtn = wrap.querySelector('[data-player-toggle]');
@@ -1319,6 +1357,8 @@
 			const sleepPopup = wrap.querySelector('[data-sleep-popup]');
 			const commercialBtn = wrap.querySelector('[data-player-commercial]');
 			const songBtn = wrap.querySelector('[data-player-song]');
+			const mergePrevBtn = wrap.querySelector('[data-player-merge-prev]');
+			const mergeNextBtn = wrap.querySelector('[data-player-merge-next]');
 			const shuffleAllBtn = wrap.querySelector('[data-player-shuffle-all]');
 
 			if (toggleBtn) toggleBtn.addEventListener('click', () => Player.toggle());
@@ -1355,6 +1395,8 @@
 			}
 			if (commercialBtn) bindMarkButton(wrap, commercialBtn, 'commercial', '✓ Marked Commercial');
 			if (songBtn) bindMarkButton(wrap, songBtn, 'song', '✓ Marked as Song');
+			if (mergePrevBtn) bindMergeButton(wrap, mergePrevBtn, true, '✓ Joined Previous Split');
+			if (mergeNextBtn) bindMergeButton(wrap, mergeNextBtn, false, '✓ Joined Next Split');
 			const statusEl = wrap.querySelector('[data-resplit-status]');
 			const barEl = wrap.querySelector('[data-progress-bar]');
 			if (barEl) barEl.addEventListener('contextmenu', async (e) => {

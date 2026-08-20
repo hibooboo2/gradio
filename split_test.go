@@ -208,3 +208,88 @@ func TestResplitSplit(t *testing.T) {
 		require.NotEqual(t, classificationReSplit, s.Classification)
 	}
 }
+
+func TestMergeSplit(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "merge.mp3")
+	// A continuous 60s tone (a real file so writeSegment can slice it).
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-y",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=60",
+		"-c:a", "libmp3lame", "-b:a", "128k", fixture)
+	require.NoError(t, cmd.Run())
+
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	recID, err := insertRecording(fixture, "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+
+	// Three adjacent splits spanning [0,20),[20,40),[40,60).
+	require.NoError(t, insertSplit(Split{RecordingID: recID, SourcePath: fixture, Index: 0, Start: 0, End: 20, OutputPath: filepath.Join(dir, "a.mp3")}))
+	require.NoError(t, insertSplit(Split{RecordingID: recID, SourcePath: fixture, Index: 1, Start: 20, End: 40, OutputPath: filepath.Join(dir, "b.mp3")}))
+	require.NoError(t, insertSplit(Split{RecordingID: recID, SourcePath: fixture, Index: 2, Start: 40, End: 60, OutputPath: filepath.Join(dir, "c.mp3")}))
+
+	splits, err := fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, splits, 3)
+	var middle Split
+	for _, s := range splits {
+		if s.Index == 1 {
+			middle = s
+		}
+	}
+	require.NotZero(t, middle.ID)
+
+	// "End too soon": merge the middle split with the split after it.
+	cur, adj, merged, err := mergeSplit(t.Context(), middle.ID, false)
+	require.NoError(t, err)
+	require.InDelta(t, 20, cur.Start, 0.001)
+	require.InDelta(t, 40, cur.End, 0.001)
+	require.InDelta(t, 40, adj.Start, 0.001)
+	require.InDelta(t, 60, adj.End, 0.001)
+	require.InDelta(t, 20, merged.Start, 0.001)
+	require.InDelta(t, 60, merged.End, 0.001)
+
+	// The merged output file exists with the combined duration.
+	info, err := os.Stat(merged.OutputPath)
+	require.NoError(t, err)
+	require.Positive(t, info.Size())
+	d, err := fileDuration(merged.OutputPath)
+	require.NoError(t, err)
+	require.InDelta(t, 40, d, 0.5)
+
+	// Both source splits are now re_split.
+	for _, id := range []int64{cur.ID, adj.ID} {
+		f, err := fetchSplit(id)
+		require.NoError(t, err)
+		require.Equal(t, classificationReSplit, f.Classification)
+	}
+
+	// DB now has 4 splits total (3 originals + 1 merged).
+	all, err := fetchSplitsForRecording(recID)
+	require.NoError(t, err)
+	require.Len(t, all, 4)
+
+	// "Start too soon": the merged split spans [20,60), so there is no split
+	// before it to join on; merging with the previous neighbor errors.
+	var mergedID int64
+	for _, s := range all {
+		if s.Classification != classificationReSplit {
+			mergedID = s.ID
+			break
+		}
+	}
+	require.NotZero(t, mergedID)
+	_, _, _, err = mergeSplit(t.Context(), mergedID, true)
+	require.ErrorIs(t, err, errNoAdjacentSplit)
+}

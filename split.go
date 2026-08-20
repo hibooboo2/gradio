@@ -49,13 +49,17 @@ const (
 	classificationNotSong    = "not_song"
 	classificationLikelySong = "likely_song"
 	classificationCommercial = "commercial"
-	classificationSong      = "song"
-	classificationReSplit   = "re_split"
+	classificationSong       = "song"
+	classificationReSplit    = "re_split"
 )
 
 // errCutOutsideSplit is returned when a resplit cut time falls outside a
 // split's boundaries.
 var errCutOutsideSplit = errors.New("cut time is outside the split")
+
+// errNoAdjacentSplit is returned when a split has no neighbor to merge with
+// in its source recording.
+var errNoAdjacentSplit = errors.New("no adjacent split to merge with")
 
 var (
 	silenceStartRE = regexp.MustCompile(`silence_start:\s*([0-9.]+)`)
@@ -385,6 +389,117 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Spl
 	}
 
 	return orig, a, b, nil
+}
+
+// boundaryMatch reports whether two stream positions are close enough to be
+// the same boundary between adjacent splits (accounting for float rounding
+// from re-encoding).
+func boundaryMatch(a, b float64) bool {
+	return math.Abs(a-b) < 0.01
+}
+
+// mergeSplit joins the given split with the split that comes immediately
+// before (prev=true) or after (prev=false) it in the same source recording,
+// then stores a single merged split in their place. Both source splits are
+// marked re_split. The merged output is extracted from the original recording
+// (not from either source file) so the combined boundaries are exact.
+//
+// A song whose end was cut too soon should be merged with the split that came
+// after it (prev=false); a song whose start was cut too soon should be merged
+// with the split that came before it (prev=true).
+func mergeSplit(ctx context.Context, splitID int64, prev bool) (current Split, other Split, merged Split, err error) {
+	cur, err := fetchSplit(splitID)
+	if err != nil {
+		return Split{}, Split{}, Split{}, err
+	}
+	if cur.Classification == classificationReSplit {
+		return Split{}, Split{}, Split{}, fmt.Errorf("split %d is already re_split", splitID)
+	}
+
+	splits, err := fetchSplitsForRecording(cur.RecordingID)
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("fetch recording splits: %w", err)
+	}
+
+	// Find the adjacent split by matching its boundary to the current one.
+	var adj Split
+	found := false
+	for _, s := range splits {
+		if s.ID == cur.ID {
+			continue
+		}
+		if prev && boundaryMatch(s.End, cur.Start) {
+			adj = s
+			found = true
+			break
+		}
+		if !prev && boundaryMatch(s.Start, cur.End) {
+			adj = s
+			found = true
+			break
+		}
+	}
+	if !found {
+		dir := "next"
+		if prev {
+			dir = "previous"
+		}
+		return Split{}, Split{}, Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, splitID, dir)
+	}
+	if adj.Classification == classificationReSplit {
+		return Split{}, Split{}, Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
+	}
+
+	var start, end float64
+	if prev {
+		start, end = adj.Start, cur.End
+	} else {
+		start, end = cur.Start, adj.End
+	}
+
+	wd, _ := os.Getwd()
+	inputPath := cur.SourcePath
+	if !filepath.IsAbs(inputPath) {
+		inputPath = filepath.Join(wd, inputPath)
+	}
+
+	positions, err := nextSplitPositions(cur.RecordingID, 1)
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("allocate split position: %w", err)
+	}
+
+	radio := radioFromPath(cur.SourcePath)
+
+	out, err := writeSegment(ctx, radio, inputPath, start, end, positions[0])
+	if err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("write merged segment: %w", err)
+	}
+
+	merged = Split{
+		RecordingID:    cur.RecordingID,
+		SourcePath:     cur.SourcePath,
+		Index:          positions[0],
+		Start:          start,
+		End:            end,
+		OutputPath:     out,
+		Classification: cur.Classification,
+	}
+	if err := insertSplit(merged); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("store merged split: %w", err)
+	}
+
+	// Mark both source splits re_split only after the merged split exists so a
+	// failure leaves them fully playable.
+	cur.Classification = classificationReSplit
+	if err := updateSplit(cur); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("mark split re_split: %w", err)
+	}
+	adj.Classification = classificationReSplit
+	if err := updateSplit(adj); err != nil {
+		return Split{}, Split{}, Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
+	}
+
+	return cur, adj, merged, nil
 }
 
 func detectSilence(ctx context.Context, inputPath string) (chan silence, error) {

@@ -403,6 +403,8 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 		<div class="mark-row">
 			<button type="button" data-player-song disabled title="Classify the currently playing track as a song">&#127925; Mark as Song</button>
 			<button type="button" data-player-commercial disabled title="Classify the currently playing track as a commercial">&#128226; Mark Commercial</button>
+			<button type="button" data-player-merge-prev disabled title="This track started too soon: join the previous split on to it">&#9198;&#65039; Start Too Soon</button>
+			<button type="button" data-player-merge-next disabled title="This track ended too soon: join the following split on to it">&#9197;&#65039; End Too Soon</button>
 		</div>
 
 		<p class="resplit-status" data-resplit-status hidden></p>

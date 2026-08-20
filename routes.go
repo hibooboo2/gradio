@@ -99,6 +99,7 @@ func routes() http.Handler {
 	mux.HandleFunc("POST /api/splits/{id}/play", handleRecordPlay)
 	mux.HandleFunc("POST /api/splits/{id}/rating", handleSetRating)
 	mux.HandleFunc("POST /api/splits/{id}/resplit", handleResplitSplit)
+	mux.HandleFunc("POST /api/splits/{id}/merge", handleMergeSplit)
 
 	// Global shuffle queue (JSON) for the player's Shuffle All mode.
 	mux.HandleFunc("GET /api/shuffle", handleShuffleJSON)
@@ -323,6 +324,46 @@ func handleResplitSplit(w http.ResponseWriter, r *http.Request) {
 		"original": original,
 		"a":        a,
 		"b":        b,
+	})
+}
+
+// handleMergeSplit joins the current split with the split immediately before
+// (direction "prev") or after (direction "next") it in the same recording,
+// marking both source splits re_split and creating a single merged split.
+func handleMergeSplit(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid split id")
+		return
+	}
+
+	var req struct {
+		Direction *string `json:"direction"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Direction == nil || (*req.Direction != "prev" && *req.Direction != "next") {
+		writeError(w, http.StatusBadRequest, "direction must be \"prev\" or \"next\"")
+		return
+	}
+
+	current, other, merged, err := mergeSplit(r.Context(), id, *req.Direction == "prev")
+	if err != nil {
+		if errors.Is(err, errNoAdjacentSplit) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.ErrorContext(r.Context(), "merge split", "err", err, "id", id, "direction", *req.Direction)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"current": current,
+		"other":   other,
+		"merged":  merged,
 	})
 }
 
