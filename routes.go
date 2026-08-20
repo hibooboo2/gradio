@@ -52,6 +52,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /api/playlists         list playlists
 //	GET    /api/playlists/{id}    get one playlist with its songs
 //	GET    /api/songs             list all splits available as songs
+//
 // GET    /api/radios            list radios with playable splits
 // GET    /api/shuffle           next global-shuffle batch (?exclude=ids)
 //
@@ -257,7 +258,7 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := setRating(id, req.Rating); err != nil {
+	if err := setRating(id, req.Rating == "like"); err != nil {
 		slog.ErrorContext(r.Context(), "set rating", "err", err, "id", id, "rating", req.Rating)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

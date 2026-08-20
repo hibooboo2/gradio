@@ -148,7 +148,7 @@ func createSchema(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS song_plays (
 			split_id   INT PRIMARY KEY REFERENCES splits(id) ON DELETE CASCADE,
 			plays      INT NOT NULL DEFAULT 0,
-			rating     STRING NOT NULL DEFAULT '',
+			rating     INT NOT NULL DEFAULT 0,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE INDEX IF NOT EXISTS idx_song_plays_plays ON song_plays(plays);
@@ -487,7 +487,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
-		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
 		 WHERE s.classification != $1 AND s.id != ALL($2::INT[])
@@ -496,7 +496,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 		classificationCommercial, exclude, limit,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch shuffle: %w", err)
 	}
 	defer rows.Close()
 
@@ -529,15 +529,19 @@ func recordPlay(splitID int64) error {
 
 // setRating records a like, dislike, or (when rating is "") clears the rating
 // for a split. Existing play counts are preserved.
-func setRating(splitID int64, rating string) error {
+func setRating(splitID int64, wasLiked bool) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
+	liked := 0
+	if wasLiked {
+		liked = 1
+	}
 	_, err := recordDB.Exec(
-		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 0, $2)
-		 ON CONFLICT (split_id) DO UPDATE SET rating = $2, updated_at = now()`,
-		splitID, rating,
+		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 1, $2)
+		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + 1, updated_at = now()`,
+		splitID, liked,
 	)
 	return err
 }
