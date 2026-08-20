@@ -21,7 +21,6 @@ import (
 	"github.com/faiface/beep/speaker"
 	glog "github.com/hibooboo2/gradio/log"
 	"github.com/schollz/progressbar/v3"
-	mpb "github.com/vbauerster/mpb/v8"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -48,6 +47,7 @@ func main() {
 
 	play := flag.Bool("play", false, "play audio while recording")
 	record := flag.Bool("record", false, "record radio stations")
+	watch := flag.Bool("watch", false, "watch files for splitts")
 	file := flag.String("f", "", "file to auto split")
 	addr := flag.String("http", ":8000", "http listen address for the management API")
 	flag.Parse()
@@ -69,33 +69,33 @@ func main() {
 		return serveAPI(ctx, *addr)
 	})
 
-	wg.Go(func() error {
-		filepath.WalkDir("recordings", func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				slog.Error("Walk dir error", "err", err)
-			}
-			slog.Info("Recordings walk", "path", path, "entry", d.Name(), "dir", d.IsDir())
-			if d.IsDir() {
-				return nil
-			}
-			if filepath.Ext(path) != ".mp3" {
-				slog.Info("Non mp3", "ext", filepath.Ext(path))
-				return nil
-			}
-			wg.Go(func() error {
-				err = SplitStream(ctx, path)
+	if *watch {
+		wg.Go(func() error {
+			filepath.WalkDir("recordings", func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
-					slog.ErrorContext(ctx, "Failed to split stream", "err", err)
+					slog.Error("Walk dir error", "err", err)
 				}
+				slog.Info("Recordings walk", "path", path, "entry", d.Name(), "dir", d.IsDir())
+				if d.IsDir() {
+					return nil
+				}
+				if filepath.Ext(path) != ".mp3" {
+					slog.Info("Non mp3", "ext", filepath.Ext(path))
+					return nil
+				}
+				wg.Go(func() error {
+					err = SplitStream(ctx, path)
+					if err != nil {
+						slog.ErrorContext(ctx, "Failed to split stream", "err", err)
+					}
+					return nil
+				})
 				return nil
 			})
+			watchAndSplit(ctx)
 			return nil
 		})
-		watchAndSplit(ctx)
-		return nil
-	})
-
-	bar := mpb.New(mpb.WithWidth(70))
+	}
 
 	if *record {
 		for name, url := range urls {
