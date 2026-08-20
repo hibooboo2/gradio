@@ -119,6 +119,7 @@ func TestPlaylistsViewRenders(t *testing.T) {
 	// Expanded play lists fragment must include the added song and a working
 	// remove link (this previously failed with a template error).
 	req := httptest.NewRequest(http.MethodGet, "/playlists/view?expand="+strconv.FormatInt(p.ID, 10), nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -129,6 +130,7 @@ func TestPlaylistsViewRenders(t *testing.T) {
 
 	// Player fragment must render an audio element and the song in the queue.
 	req = httptest.NewRequest(http.MethodGet, "/player/view?playlist="+strconv.FormatInt(p.ID, 10), nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -139,6 +141,7 @@ func TestPlaylistsViewRenders(t *testing.T) {
 
 	// Empty player fragment when no playlist is selected.
 	req = httptest.NewRequest(http.MethodGet, "/player/view", nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -199,6 +202,7 @@ func TestRadioPlayback(t *testing.T) {
 
 	// Empty player state lists the radios with play buttons.
 	req := httptest.NewRequest(http.MethodGet, "/player/view", nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -208,6 +212,7 @@ func TestRadioPlayback(t *testing.T) {
 
 	// Radio mode renders a player queue and a radio subtitle.
 	req = httptest.NewRequest(http.MethodGet, "/player/view?radio=RadioA", nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -218,6 +223,7 @@ func TestRadioPlayback(t *testing.T) {
 
 	// JSON endpoint lists radios.
 	req = httptest.NewRequest(http.MethodGet, "/api/radios", nil)
+	req.SetBasicAuth(testUsername, testPassword)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)

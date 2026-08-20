@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // defaultDBPath is the insecure CockroachDB connection used by the docker
@@ -154,6 +155,13 @@ func createSchema(db *sql.DB) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE INDEX IF NOT EXISTS idx_song_plays_plays ON song_plays(plays);
+
+		CREATE TABLE IF NOT EXISTS users (
+			id         INT PRIMARY KEY DEFAULT unique_rowid(),
+			name       STRING NOT NULL UNIQUE,
+			password   STRING NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	return err
 }
@@ -578,4 +586,56 @@ func fetchSongStats(splitID int64) (plays int, rating int, err error) {
 		return 0, 0, err
 	}
 	return plays, rating, nil
+}
+
+// User is one row in the users table. Password holds the bcrypt hash of the
+// user's basic-auth password; it is never stored in plaintext.
+type User struct {
+	ID        int64
+	Name      string
+	Password  string
+}
+
+// fetchUserByName returns the user with the given name, or sql.ErrNoRows when
+// no such user exists.
+func fetchUserByName(name string) (User, error) {
+	if recordDB == nil {
+		return User{}, fmt.Errorf("nil db")
+	}
+
+	var u User
+	err := recordDB.QueryRow(
+		`SELECT id, name, password FROM users WHERE name = $1`,
+		name,
+	).Scan(&u.ID, &u.Name, &u.Password)
+	if err != nil {
+		return User{}, err
+	}
+	return u, nil
+}
+
+// createUser stores a new user with the given name and password. The password
+// is bcrypt-hashed before being written. It is an error if a user with the
+// same name already exists (the name column is unique).
+func createUser(name, password string) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	_, err = recordDB.Exec(
+		`INSERT INTO users (name, password) VALUES ($1, $2)`,
+		name, string(hash),
+	)
+	return err
+}
+
+// userPasswordMatches reports whether the given plaintext password matches the
+// stored bcrypt hash for the user.
+func userPasswordMatches(u User, password string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) == nil
 }

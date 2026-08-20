@@ -76,7 +76,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
 //	POST   /playlists/{id}/songs/{split_id}/delete  remove a split from a playlist
-func routes() *http.ServeMux {
+func routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// Page URLs serve the app shell so any view can be opened (or reloaded)
@@ -119,7 +119,7 @@ func routes() *http.ServeMux {
 	// Serve the htmx web app from the web/ directory.
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
-	return mux
+	return requireAuth(mux)
 }
 
 // serveIndex serves the htmx app shell so the page URLs work when opened or
