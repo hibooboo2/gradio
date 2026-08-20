@@ -52,12 +52,15 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /api/playlists         list playlists
 //	GET    /api/playlists/{id}    get one playlist with its songs
 //	GET    /api/songs             list all splits available as songs
-//	GET    /api/radios            list radios with playable splits
+// GET    /api/radios            list radios with playable splits
+// GET    /api/shuffle           next global-shuffle batch (?exclude=ids)
 //
 // Splits/recordings detail API:
 //
 //	GET    /splits/{id}           get one split
 //	PATCH  /splits/{id}           update a split's start, end, and/or classification
+//	POST   /api/splits/{id}/play  record that a split was listened to
+//	POST   /api/splits/{id}/rating  like/dislike a split ({"rating":"like"|"dislike"|""})
 //	GET    /recordings            list all recordings
 //	GET    /music/{path...}       serve a split output file from split_music/
 //
@@ -65,7 +68,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //
 //	GET    /splits/view            splits tab fragment
 //	GET    /playlists/view         play lists tab fragment
-//	GET    /player/view            player tab fragment (?playlist=.. or ?radio=..)
+//	GET    /player/view            player tab fragment (?shuffle=1, ?playlist=.. or ?radio=..)
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
@@ -90,6 +93,11 @@ func routes() *http.ServeMux {
 	mux.HandleFunc("GET /splits/{id}", handleGetSplit)
 	mux.HandleFunc("PATCH /splits/{id}", handleUpdateSplit)
 	mux.HandleFunc("GET /recordings", handleListRecordings)
+	mux.HandleFunc("POST /api/splits/{id}/play", handleRecordPlay)
+	mux.HandleFunc("POST /api/splits/{id}/rating", handleSetRating)
+
+	// Global shuffle queue (JSON) for the player's Shuffle All mode.
+	mux.HandleFunc("GET /api/shuffle", handleShuffleJSON)
 
 	// htmx fragments.
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
@@ -203,6 +211,64 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, split)
+}
+
+// handleRecordPlay records that a split was listened to, incrementing its play
+// count in the song_plays table.
+func handleRecordPlay(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid split id")
+		return
+	}
+
+	if err := recordPlay(id); err != nil {
+		slog.ErrorContext(r.Context(), "record play", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	plays, rating, err := fetchSongStats(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "plays": plays, "rating": rating})
+}
+
+// handleSetRating records a like or dislike for a split, or clears it when the
+// submitted rating is empty.
+func handleSetRating(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid split id")
+		return
+	}
+
+	var req struct {
+		Rating string `json:"rating"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Rating != "" && req.Rating != "like" && req.Rating != "dislike" {
+		writeError(w, http.StatusBadRequest, "rating must be \"like\", \"dislike\", or empty")
+		return
+	}
+
+	if err := setRating(id, req.Rating); err != nil {
+		slog.ErrorContext(r.Context(), "set rating", "err", err, "id", id, "rating", req.Rating)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	plays, rating, err := fetchSongStats(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "plays": plays, "rating": rating})
 }
 
 func handleListRecordings(w http.ResponseWriter, r *http.Request) {

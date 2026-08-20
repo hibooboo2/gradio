@@ -457,6 +457,29 @@
 			font-size: 0.8rem;
 			font-variant-numeric: tabular-nums;
 		}
+		.mark-row {
+			display: flex;
+			justify-content: center;
+			gap: 0.5rem;
+			margin-top: 1.25rem;
+		}
+		.mark-row button.success {
+			background: var(--accent-2);
+		}
+		.rating-row {
+			display: flex;
+			justify-content: center;
+			gap: 0.75rem;
+			margin-top: 1.25rem;
+		}
+		.shuffle-all-row {
+			display: flex;
+			justify-content: center;
+			margin-top: 1rem;
+		}
+		.player-empty .shuffle-all {
+			margin-bottom: 1.5rem;
+		}
 		.sleep-popup {
 			position: absolute;
 			bottom: calc(100% + 0.5rem);
@@ -776,6 +799,12 @@
 			let pageURL = '/player';
 			let sleepEndsAt = null;
 			let sleepInterval = null;
+			// Splits already played in the current global-shuffle session, so
+			// the next batch excludes them until the whole library is heard.
+			let shufflePlayed = new Set();
+			// The last split id a play was recorded for, so pausing/resuming the
+			// same track does not double count.
+			let lastPlayRecordedSplit = null;
 
 			function fmtTime(s) {
 				if (!isFinite(s) || s < 0) return '0:00';
@@ -799,6 +828,13 @@
 
 			function nextIdx() {
 				if (queue.length === 0) return -1;
+				// Global shuffle batches are finite: when one batch has been
+				// played through, return -1 so next() fetches the next batch
+				// instead of wrapping around the same songs.
+				if (queueKey === 'shuffle') {
+					const i = index + 1;
+					return i < queue.length ? i : -1;
+				}
 				if (shuffle) {
 					if (shuffleOrder.length !== queue.length) buildShuffle();
 					const pos = (shuffleOrder.indexOf(index) + 1) % shuffleOrder.length;
@@ -810,6 +846,10 @@
 
 			function prevIdx() {
 				if (queue.length === 0) return -1;
+				if (queueKey === 'shuffle') {
+					const i = index - 1;
+					return i >= 0 ? i : 0;
+				}
 				if (shuffle) {
 					if (shuffleOrder.length !== queue.length) buildShuffle();
 					const pos = (shuffleOrder.indexOf(index) - 1 + shuffleOrder.length) % shuffleOrder.length;
@@ -829,18 +869,91 @@
 				renderAll();
 			}
 
-			function next() { const i = nextIdx(); if (i < 0) { audio.pause(); renderAll(); } else playAt(i); }
+			function next() {
+				const i = nextIdx();
+				if (i < 0) {
+					// In global shuffle mode the queue is only a batch: when it
+					// runs out, fetch the next batch of not-yet-played songs.
+					if (queueKey === 'shuffle') { continueShuffle(); return; }
+					audio.pause(); renderAll(); return;
+				}
+				playAt(i);
+			}
 			function prev() {
 				if (audio.currentTime > 3) { audio.currentTime = 0; return; }
 				const i = prevIdx();
 				if (i >= 0) playAt(i);
 			}
 
+			async function recordPlay(splitId) {
+				if (queueKey === 'shuffle') shufflePlayed.add(splitId);
+				try {
+					await fetch('/api/splits/' + splitId + '/play', { method: 'POST' });
+				} catch (err) { /* ignore network errors */ }
+			}
+
+			// Fetch the next global-shuffle batch (least played first, excluding
+			// splits already heard this session) and keep playing.
+			async function continueShuffle() {
+				const exclude = [...shufflePlayed].join(',');
+				const qs = exclude ? '?exclude=' + encodeURIComponent(exclude) : '';
+				let tracks;
+				try {
+					const res = await fetch('/api/shuffle' + qs);
+					if (!res.ok) return;
+					tracks = await res.json();
+				} catch (err) { return; }
+				if (!tracks || tracks.length === 0) {
+					// Every song has been played: restart the cycle so the least
+					// listened music (still ordered by play count) comes first.
+					shufflePlayed = new Set();
+					continueShuffle();
+					return;
+				}
+				const normalized = tracks.map(t => ({
+					src: t.src,
+					title: t.title,
+					split: String(t.id),
+					rating: t.rating || '',
+					plays: t.plays || 0,
+					sub: fmtTime(t.start) + ' – ' + fmtTime(t.end) + ' · ' +
+						(t.classification || '') + (t.plays ? ' · ♪ ' + t.plays : ''),
+				}));
+				loadQueue(normalized, { queueKey: 'shuffle', source: 'Global Shuffle', startIndex: 0, autoplay: true });
+				const wrap = document.querySelector('[data-player-wrap]');
+				if (wrap) {
+					const ul = wrap.querySelector('[data-player-queue]');
+					if (ul) renderQueueList(ul, normalized);
+				}
+			}
+
+			async function rate(rating) {
+				const cur = current();
+				if (!cur || !cur.split) return;
+				const nextRating = (cur.rating === rating) ? '' : rating;
+				cur.rating = nextRating;
+				try {
+					await fetch('/api/splits/' + cur.split + '/rating', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ rating: nextRating }),
+					});
+				} catch (err) { /* ignore network errors */ }
+				renderAll();
+			}
+
 			audio.addEventListener('ended', () => {
 				if (repeat === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); return; }
 				next();
 			});
-			audio.addEventListener('play', renderAll);
+			audio.addEventListener('play', () => {
+				const cur = current();
+				if (cur && cur.split && cur.split !== lastPlayRecordedSplit) {
+					lastPlayRecordedSplit = cur.split;
+					recordPlay(cur.split);
+				}
+				renderAll();
+			});
 			audio.addEventListener('pause', renderAll);
 			audio.addEventListener('timeupdate', renderAll);
 			audio.addEventListener('loadedmetadata', renderAll);
@@ -852,12 +965,17 @@
 				queueKey = opts.queueKey || '';
 				source = opts.source || '';
 				pageURL = queuePageURL(queueKey);
+				if (opts.freshShuffle) shufflePlayed = new Set();
 				index = (typeof opts.startIndex === 'number') ? opts.startIndex : 0;
 				if (index < 0 || index >= queue.length) index = 0;
+				// Global shuffle is inherently shuffled: keep the toggle on so
+				// the button shows active for the whole session.
+				if (queueKey === 'shuffle') shuffle = true;
 				if (shuffle) buildShuffle();
 				if (queue.length > 0) {
 					audio.src = queue[index].src;
 					audio.currentTime = 0;
+					if (opts.autoplay) audio.play().catch(() => {});
 				}
 				renderAll();
 			}
@@ -865,6 +983,7 @@
 			// Reconstruct the page URL for a queue key so the mini player can
 			// reopen the view that is actually playing.
 			function queuePageURL(key) {
+				if (key === 'shuffle') return '/player?shuffle=1';
 				if (key && key.indexOf('radio:') === 0) {
 					return '/player?radio=' + encodeURIComponent(key.slice('radio:'.length));
 				}
@@ -892,7 +1011,11 @@
 			}
 
 			function setShuffle(v) { shuffle = !!v; if (shuffle) buildShuffle(); renderAll(); }
-			function toggleShuffle() { setShuffle(!shuffle); }
+			function toggleShuffle() {
+				// Global shuffle is always shuffled; the toggle can't turn it off.
+				if (queueKey === 'shuffle') { shuffle = true; renderAll(); return; }
+				setShuffle(!shuffle);
+			}
 			function setRepeat(m) { repeat = m; renderAll(); }
 			function cycleRepeat() {
 				const order = ['off', 'all', 'one'];
@@ -965,6 +1088,7 @@
 				toggleMute,
 				startSleep,
 				stopSleep,
+				rate,
 			};
 		})();
 
@@ -1002,6 +1126,41 @@
 		// Called whenever a player fragment is swapped in. Loads the queue into
 		// the singleton unless the same queue is already playing (so re-rendering
 		// the view does not restart playback), then wires the view's controls.
+
+		// Rebuild the visible queue list from Player's track objects. Used to
+		// keep the on-screen queue in sync with the global shuffle after it
+		// fetches a fresh batch without a full view swap.
+		function renderQueueList(ul, tracks) {
+			ul.innerHTML = '';
+			tracks.forEach((t, i) => {
+				const li = document.createElement('li');
+				li.className = 'queue-item' + (i === Player.index ? ' active' : '');
+				li.setAttribute('data-player-track', '');
+				li.setAttribute('data-src', t.src);
+				li.setAttribute('data-title', t.title);
+				li.setAttribute('data-split', t.split);
+				const num = document.createElement('span');
+				num.className = 'queue-num';
+				num.textContent = String(i + 1);
+				const info = document.createElement('div');
+				info.className = 'queue-info';
+				const title = document.createElement('span');
+				title.className = 'queue-title';
+				title.textContent = t.title;
+				const sub = document.createElement('span');
+				sub.className = 'queue-sub';
+				sub.textContent = t.sub || '';
+				info.appendChild(title);
+				info.appendChild(sub);
+				li.appendChild(num);
+				li.appendChild(info);
+				li.addEventListener('click', () => Player.playAt(i));
+				ul.appendChild(li);
+			});
+			const hdr = ul.closest('.queue') && ul.closest('.queue').querySelector('.queue-header span');
+			if (hdr) hdr.textContent = tracks.length + (tracks.length === 1 ? ' track' : ' tracks');
+		}
+
 		function bindFullPlayer(root) {
 			const wrap = root.querySelector('[data-player-wrap]') || root;
 			if (!wrap || !wrap.querySelector('[data-audio]')) return;
@@ -1012,6 +1171,7 @@
 				src: li.getAttribute('data-src'),
 				title: li.getAttribute('data-title'),
 				split: li.getAttribute('data-split'),
+				sub: (li.querySelector('.queue-sub') || {}).textContent || '',
 				el: li,
 			}));
 
@@ -1021,6 +1181,10 @@
 				const cur = Player.current();
 				const wantStart = startSplit && (!cur || String(cur.split) !== String(startSplit));
 				if (!wantStart) {
+					// The server may have rendered a different shuffle batch than
+					// what is actually playing; rebuild the list from Player state.
+					const ul = wrap.querySelector('[data-player-queue]');
+					if (ul) renderQueueList(ul, Player.queue);
 					syncFullView(wrap);
 					return;
 				}
@@ -1031,6 +1195,8 @@
 				queueKey: queueKey,
 				startIndex: startIndex >= 0 ? startIndex : 0,
 				source: (wrap.querySelector('[data-player-subtitle]') || {}).textContent || '',
+				freshShuffle: queueKey === 'shuffle',
+				autoplay: queueKey === 'shuffle',
 			});
 		}
 
@@ -1050,6 +1216,9 @@
 			const eq = wrap.querySelector('[data-eq]');
 			const sleepBtn = wrap.querySelector('[data-player-sleep]');
 			const sleepRemaining = wrap.querySelector('[data-sleep-remaining]');
+			const commercialBtn = wrap.querySelector('[data-player-commercial]');
+			const songBtn = wrap.querySelector('[data-player-song]');
+			const rateBtns = wrap.querySelectorAll('[data-player-rate]');
 
 			const cur = Player.current();
 			const playing = Player.isPlaying;
@@ -1085,6 +1254,42 @@
 			if (sleepRemaining) {
 				sleepRemaining.textContent = Player.sleepActive ? '🌙 ' + Player.fmtTime(Player.sleepRemaining / 1000) : '';
 			}
+			if (commercialBtn) commercialBtn.disabled = !Player.hasQueue;
+			if (songBtn) songBtn.disabled = !Player.hasQueue;
+			const curRating = cur ? (cur.rating || '') : '';
+			rateBtns.forEach(btn => {
+				btn.classList.toggle('active', btn.getAttribute('data-rating') === curRating);
+			});
+		}
+
+		// PATCH the currently playing split's classification and show a brief
+		// green success state on the button that was clicked.
+		function bindMarkButton(wrap, btn, classification, doneLabel) {
+			btn.addEventListener('click', async () => {
+				const cur = Player.current();
+				if (!cur || !cur.split) return;
+				const label = btn.textContent;
+				try {
+					const res = await fetch('/splits/' + cur.split, {
+						method: 'PATCH',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ classification: classification }),
+					});
+					if (!res.ok) return;
+					const items = wrap.querySelectorAll('[data-player-track]');
+					const item = items[Player.index];
+					if (item) {
+						const cls = item.querySelector('[data-cls]');
+						if (cls) cls.textContent = classification;
+					}
+					btn.textContent = doneLabel;
+					btn.classList.add('success');
+					setTimeout(() => {
+						btn.textContent = label;
+						btn.classList.remove('success');
+					}, 2000);
+				} catch (err) { /* ignore network errors */ }
+			});
 		}
 
 		// Bind the full player view's controls to the singleton.
@@ -1099,6 +1304,9 @@
 			const bar = wrap.querySelector('[data-progress-bar]');
 			const sleepBtn = wrap.querySelector('[data-player-sleep]');
 			const sleepPopup = wrap.querySelector('[data-sleep-popup]');
+			const commercialBtn = wrap.querySelector('[data-player-commercial]');
+			const songBtn = wrap.querySelector('[data-player-song]');
+			const shuffleAllBtn = wrap.querySelector('[data-player-shuffle-all]');
 
 			if (toggleBtn) toggleBtn.addEventListener('click', () => Player.toggle());
 			if (prevBtn) prevBtn.addEventListener('click', () => Player.prev());
@@ -1132,6 +1340,20 @@
 					sleepPopup.hidden = true;
 				});
 			}
+			if (commercialBtn) bindMarkButton(wrap, commercialBtn, 'commercial', '✓ Marked Commercial');
+			if (songBtn) bindMarkButton(wrap, songBtn, 'song', '✓ Marked as Song');
+			wrap.querySelectorAll('[data-player-rate]').forEach(btn => {
+				btn.addEventListener('click', () => Player.rate(btn.getAttribute('data-rating')));
+			});
+			if (shuffleAllBtn) shuffleAllBtn.addEventListener('click', () => {
+				Player.clearQueue();
+				if (history.state && history.state.__gradio === '/player?shuffle=1') {
+					history.replaceState({ __gradio: '/player?shuffle=1' }, '', '/player?shuffle=1');
+				} else {
+					history.pushState({ __gradio: '/player?shuffle=1' }, '', '/player?shuffle=1');
+				}
+				htmx.ajax('GET', '/player/view?shuffle=1', '#content');
+			});
 		}
 
 		// Render all surfaces (mini + full view) from the current Player state.

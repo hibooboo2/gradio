@@ -30,6 +30,8 @@ type PlaylistSong struct {
 	SplitID    int64
 	Position   int
 	Split      Split
+	Plays      int
+	Rating     string
 }
 
 // createPlaylist inserts a new playlist and returns the created row.
@@ -127,9 +129,11 @@ func fetchPlaylistSongs(playlistID int64) ([]PlaylistSong, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT ps.playlist_id, ps.split_id, ps.position,
-		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
+		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
 		 FROM playlist_splits ps
 		 JOIN splits s ON s.id = ps.split_id
+		 LEFT JOIN song_plays sp ON sp.split_id = s.id
 		 WHERE ps.playlist_id = $1
 		 ORDER BY ps.position ASC`,
 		playlistID,
@@ -146,6 +150,7 @@ func fetchPlaylistSongs(playlistID int64) ([]PlaylistSong, error) {
 			&song.PlaylistID, &song.SplitID, &song.Position,
 			&song.Split.ID, &song.Split.RecordingID, &song.Split.SourcePath, &song.Split.Index,
 			&song.Split.Start, &song.Split.End, &song.Split.OutputPath, &song.Split.Classification,
+			&song.Plays, &song.Rating,
 		); err != nil {
 			return nil, err
 		}
@@ -234,6 +239,11 @@ type playerViewData struct {
 
 // radioQueueSize is how many random splits are loaded into a radio's queue.
 const radioQueueSize = 100
+
+// shuffleBatchSize is how many splits are loaded per batch of the global
+// shuffle. When a batch finishes playing, the client fetches the next batch of
+// songs that have not been played yet in that session.
+const shuffleBatchSize = 5
 
 var viewFuncs = template.FuncMap{
 	"musicURL":  musicURL,
@@ -371,6 +381,11 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 			<input type="range" data-player-volume min="0" max="1" step="0.01">
 		</div>
 
+		<div class="rating-row">
+			<button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>
+			<button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>
+		</div>
+
 		<div class="sleep-row">
 			<button type="button" class="icon-btn sleep-btn" data-player-sleep title="Sleep timer">&#127769;&#65039;</button>
 			<span class="sleep-remaining" data-sleep-remaining></span>
@@ -383,6 +398,16 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 				<button type="button" data-sleep-min="60">60 min</button>
 				<button type="button" class="sleep-off" data-sleep-off>Off</button>
 			</div>
+		</div>
+
+		<div class="mark-row">
+			<button type="button" data-player-song disabled title="Classify the currently playing track as a song">&#127925; Mark as Song</button>
+			<button type="button" data-player-commercial disabled title="Classify the currently playing track as a commercial">&#128226; Mark Commercial</button>
+		</div>
+
+		<div class="shuffle-all-row">
+			<button type="button" class="btn-play" data-player-shuffle-all
+				title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
 		</div>
 	</section>
 
@@ -402,7 +427,7 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 				<span class="queue-num">{{.Position | printf "%d"}}</span>
 				<div class="queue-info">
 					<span class="queue-title">{{songTitle .Split}}</span>
-					<span class="queue-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; {{.Split.Classification}}</span>
+					<span class="queue-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; <span data-cls>{{.Split.Classification}}</span>{{if .Plays}} &middot; &#9835; {{.Plays}} play{{if ne .Plays 1}}s{{end}}{{end}}</span>
 				</div>
 			</li>
 			{{end}}
@@ -418,7 +443,12 @@ var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFu
 <div class="player-empty surface">
 	<p class="empty-icon">&#9835;</p>
 	<p class="empty">Nothing is playing.</p>
-	<p class="empty-sub">Pick a playlist from the Play Lists tab, or start a radio below.</p>
+	<p class="empty-sub">Pick a playlist from the Play Lists tab, start a radio below, or shuffle your whole library.</p>
+
+	<button class="btn-play shuffle-all"
+		hx-get="/player/view?shuffle=1" hx-target="#content" hx-swap="innerHTML"
+		hx-push-url="/player?shuffle=1" hx-on:click="selectTab('player')"
+		title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
 
 	{{if .Radios}}
 	<h3 class="radio-section-title">Radios</h3>
@@ -445,6 +475,36 @@ var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFu
 // playerEmptyData is the data model for the player empty state.
 type playerEmptyData struct {
 	Radios []Radio
+}
+
+// shuffleTrack is one track in the global shuffle queue, as returned by the
+// JSON continuation endpoint so the player can keep fetching fresh batches of
+// least-played songs without a full view swap.
+type shuffleTrack struct {
+	ID             int64   `json:"id"`
+	Title          string  `json:"title"`
+	Src            string  `json:"src"`
+	Start          float64 `json:"start"`
+	End            float64 `json:"end"`
+	Classification string  `json:"classification"`
+	Plays          int     `json:"plays"`
+	Rating         string  `json:"rating"`
+}
+
+// parseSplitIDs parses a comma-separated list of split ids, ignoring any
+// non-numeric entries.
+func parseSplitIDs(raw string) []int64 {
+	var ids []int64
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(p, 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // renderPlaylistsView executes the play lists fragment into w. The playlist
@@ -589,12 +649,50 @@ func handleRemoveSong(w http.ResponseWriter, r *http.Request) {
 	renderPlaylistsView(w, r, id)
 }
 
-// handlePlayerView renders the player tab fragment. It supports three modes:
+// handlePlayerView renders the player tab fragment. It supports four modes:
 //
+//   - ?shuffle=1: a global shuffle of every song, least played first; an
+//     optional ?exclude=<id,id,...> skips splits already played this session
 //   - ?radio=<name>: play a queue of random splits from that radio
 //   - ?playlist=<id>: play a saved playlist, with optional ?song=<split id>
 //   - no params: the empty state, which lists available radios to start
 func handlePlayerView(w http.ResponseWriter, r *http.Request) {
+	if shuffle := r.URL.Query().Get("shuffle"); shuffle != "" {
+		var exclude []int64
+		if ex := r.URL.Query().Get("exclude"); ex != "" {
+			exclude = parseSplitIDs(ex)
+		}
+
+		splits, err := fetchGlobalShuffleBatch(shuffleBatchSize, exclude)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "load global shuffle", "err", err)
+			http.Error(w, "failed to load shuffle", http.StatusInternalServerError)
+			return
+		}
+
+		songs := make([]PlaylistSong, 0, len(splits))
+		for i, s := range splits {
+			songs = append(songs, PlaylistSong{
+				SplitID:  s.ID,
+				Position: i,
+				Split:    s,
+				Plays:    s.Plays,
+				Rating:   s.Rating,
+			})
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := playerViewTemplate.Execute(w, playerViewData{
+			Playlist: Playlist{Name: "All Music"},
+			Songs:    songs,
+			Subtitle: "Global Shuffle",
+			QueueKey: "shuffle",
+		}); err != nil {
+			slog.ErrorContext(r.Context(), "render player view", "err", err)
+		}
+		return
+	}
+
 	if radio := r.URL.Query().Get("radio"); radio != "" {
 		splits, err := fetchRadioSplits(radio, radioQueueSize)
 		if err != nil {
@@ -678,6 +776,39 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "render player view", "err", err)
 	}
+}
+
+// handleShuffleJSON returns the next batch of the global shuffle as JSON so
+// the player can seamlessly continue after the current batch finishes. ?exclude
+// lists split ids already played in the session; the batch is ordered least
+// played first with a random tiebreak.
+func handleShuffleJSON(w http.ResponseWriter, r *http.Request) {
+	var exclude []int64
+	if ex := r.URL.Query().Get("exclude"); ex != "" {
+		exclude = parseSplitIDs(ex)
+	}
+
+	splits, err := fetchGlobalShuffleBatch(shuffleBatchSize, exclude)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "global shuffle json", "err", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	tracks := make([]shuffleTrack, 0, len(splits))
+	for _, s := range splits {
+		tracks = append(tracks, shuffleTrack{
+			ID:             s.ID,
+			Title:          songTitle(s),
+			Src:            musicURL(s.OutputPath),
+			Start:          s.Start,
+			End:            s.End,
+			Classification: s.Classification,
+			Plays:          s.Plays,
+			Rating:         s.Rating,
+		})
+	}
+	writeJSON(w, http.StatusOK, tracks)
 }
 
 // handleMusic serves a split output file from split_music/ for the player's

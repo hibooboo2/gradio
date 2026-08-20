@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -20,7 +21,8 @@ import (
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
 	glog "github.com/hibooboo2/gradio/log"
-	"github.com/schollz/progressbar/v3"
+	"github.com/vbauerster/mpb"
+	"github.com/vbauerster/mpb/decor"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -37,6 +39,11 @@ var urls = map[string]string{
 }
 
 var speakerOnce sync.Once
+
+// sharedProgress renders one combined progress bar display shared by all radio
+// recorders. It is created once when recording is enabled so every radio's bar
+// is shown (and updated) together.
+var sharedProgress *mpb.Progress
 
 func main() {
 	glog.Init()
@@ -98,6 +105,10 @@ func main() {
 	}
 
 	if *record {
+		// One shared progress bar display for all radios so they render and
+		// update together. A goroutine keeps it waiting until every radio is
+		// done so it renders even after the main recorder goroutines return.
+		sharedProgress = mpb.New(mpb.WithWidth(60))
 		for name, url := range urls {
 			rec := &Recorder{
 				url:       url,
@@ -131,7 +142,7 @@ type Recorder struct {
 	mu        sync.Mutex
 	url       string
 	radioName string
-	file      *os.File
+	buffer    *bytes.Buffer
 	fullName  string
 	started   time.Time
 }
@@ -204,12 +215,29 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 	}
 
 	buf := make([]byte, 64*1024)
-	bar := progressbar.New(int(rotateTime.Seconds()))
-	bar.Describe("Recording Radio: " + r.radioName)
+	total := int64(rotateTime.Seconds())
+	bar := r.newBar(total)
+	if bar != nil {
+		defer sharedProgress.Abort(bar, true)
+	}
 	currentLoop := time.Now()
+	added := 0.000
 	for {
-		bar.Set(int(time.Since(currentLoop).Seconds()))
+		since := int(time.Since(currentLoop).Seconds() - added)
+		if since > 0 {
+			bar.IncrBy(since, time.Since(currentLoop))
+			added += float64(since)
+		}
+
 		if time.Since(currentLoop) > rotateTime {
+			if bar != nil {
+				bar.SetTotal(total, true)
+				bar = r.newBar(total)
+				if bar != nil {
+					defer sharedProgress.Abort(bar, true)
+				}
+				currentLoop = time.Now()
+			}
 			err = r.rotate()
 			if err != nil {
 				return fmt.Errorf("failed to rotate file during recording")
@@ -240,29 +268,45 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 	}
 }
 
+// newBar adds this recorder's progress bar to the shared progress container.
+// It returns nil when recording is not enabled (no shared container), in which
+// case the recorder still runs without a progress bar.
+func (r *Recorder) newBar(total int64) *mpb.Bar {
+	if sharedProgress == nil {
+		return nil
+	}
+	return sharedProgress.AddBar(
+		total,
+		mpb.BarStyle("[=>-]"),
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name("Recording "+r.radioName+": ", decor.WC{W: 24, C: decor.DidentRight}),
+			decor.CountersNoUnit("%d/%d s"),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(),
+			decor.Elapsed(decor.ET_STYLE_MMSS),
+		),
+	)
+}
+
 func (r *Recorder) write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.file == nil {
+	if r.buffer == nil {
 		return 0, os.ErrClosed
 	}
 
-	return r.file.Write(p)
+	return r.buffer.Write(p)
 }
 
 func (r *Recorder) rotate() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.file != nil {
-		if err := r.file.Sync(); err != nil {
-			return err
-		}
-
-		if err := r.file.Close(); err != nil {
-			return err
-		}
+	if r.buffer != nil {
+		os.WriteFile(r.fullName, r.buffer.Bytes(), 0o644)
 
 		info, err := os.Stat(r.fullName)
 		if err != nil {
@@ -287,14 +331,9 @@ func (r *Recorder) rotate() error {
 		),
 	)
 
-	f, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-
 	slog.Info("recording to", "filename", filename, "radio", r.radioName)
 
-	r.file = f
+	r.buffer = &bytes.Buffer{}
 	r.started = now
 	r.fullName = filename
 
@@ -305,16 +344,12 @@ func (r *Recorder) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.file == nil {
+	if r.buffer == nil {
 		return
 	}
 
-	if err := r.file.Sync(); err != nil {
-		log.Printf("sync error: %v", err)
-	}
-
-	if err := r.file.Close(); err != nil {
-		log.Printf("close error: %v", err)
+	if err := os.WriteFile(r.fullName, r.buffer.Bytes(), 0o644); err != nil {
+		log.Printf("write closed recording %s: %v", r.fullName, err)
 	}
 
 	info, err := os.Stat(r.fullName)
@@ -324,7 +359,7 @@ func (r *Recorder) Close() {
 		r.recordFileToDB(r.fullName, r.started, info.Size())
 	}
 
-	r.file = nil
+	r.buffer = nil
 	r.fullName = ""
 }
 

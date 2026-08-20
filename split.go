@@ -47,6 +47,8 @@ const (
 	// minute is a probable song.
 	classificationNotSong    = "not_song"
 	classificationLikelySong = "likely_song"
+	classificationCommercial = "commercial"
+	classificationSong      = "song"
 )
 
 var (

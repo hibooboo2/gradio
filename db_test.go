@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	// Recreate the schema on the freshly-dropped tables.
 	require.NoError(t, createSchema(recordDB))
@@ -106,4 +107,102 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	recs, err := fetchAllRecordings()
 	require.NoError(t, err)
 	require.NotEmpty(t, recs)
+}
+
+// TestSongPlaysAndGlobalShuffle covers the song_plays table (play counts and
+// ratings) and the global shuffle batch selection.
+func TestSongPlaysAndGlobalShuffle(t *testing.T) {
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	recID, err := insertRecording("/tmp/global-shuffle.mp3", "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+
+	splitIDs := make([]int64, 0, 4)
+	for i, cls := range []string{"", "", classificationCommercial, ""} {
+		s := Split{
+			RecordingID:    recID,
+			SourcePath:     "/tmp/global-shuffle.mp3",
+			Index:          i,
+			Start:          float64(i * 100),
+			End:            float64(i*100 + 100),
+			OutputPath:     fmt.Sprintf("split_music/TestRadio/gs/output_%05d.mp3", i),
+			Classification: cls,
+		}
+		require.NoError(t, insertSplit(s))
+		splits, err := fetchSplitsForRecording(recID)
+		require.NoError(t, err)
+		splitIDs = append(splitIDs, splits[len(splits)-1].ID)
+	}
+	require.Len(t, splitIDs, 4)
+
+	// recordPlay increments the counter and creates the row on first play.
+	require.NoError(t, recordPlay(splitIDs[0]))
+	require.NoError(t, recordPlay(splitIDs[0]))
+
+	plays, rating, err := fetchSongStats(splitIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, 2, plays)
+	require.Empty(t, rating)
+
+	// rating can be set, toggled, and cleared without losing play counts.
+	require.NoError(t, setRating(splitIDs[0], "like"))
+	_, rating, err = fetchSongStats(splitIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, "like", rating)
+
+	require.NoError(t, setRating(splitIDs[0], "dislike"))
+	_, rating, err = fetchSongStats(splitIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, "dislike", rating)
+
+	require.NoError(t, setRating(splitIDs[0], ""))
+	plays, rating, err = fetchSongStats(splitIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, 2, plays, "clearing a rating must keep the play count")
+	require.Empty(t, rating)
+
+	// A split that was never played/rated reports zero stats.
+	plays, rating, err = fetchSongStats(splitIDs[1])
+	require.NoError(t, err)
+	require.Zero(t, plays)
+	require.Empty(t, rating)
+
+	// Global shuffle skips commercials and returns everything else once.
+	batch, err := fetchGlobalShuffleBatch(100, nil)
+	require.NoError(t, err)
+	require.Len(t, batch, 3, "commercial split must be excluded")
+	for _, s := range batch {
+		require.NotEqual(t, classificationCommercial, s.Classification)
+	}
+
+	// Excluding already-played splits keeps them out of the next batch.
+	excluded := []int64{splitIDs[1]}
+	batch, err = fetchGlobalShuffleBatch(100, excluded)
+	require.NoError(t, err)
+	require.Len(t, batch, 2)
+	for _, s := range batch {
+		require.NotContains(t, excluded, s.ID)
+	}
+
+	// The split with the most plays sorts after splits with fewer plays when
+	// every other factor is equal: a batch of size 2 over the three non-commercial
+	// splits must include the 2-play split only after the two 0-play ones.
+	excluded = nil
+	batch, err = fetchGlobalShuffleBatch(2, nil)
+	require.NoError(t, err)
+	require.Len(t, batch, 2)
+	for _, s := range batch {
+		require.NotEqual(t, splitIDs[0], s.ID, "most-played split should sort last")
+	}
 }

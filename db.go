@@ -61,6 +61,10 @@ type Split struct {
 	End            float64
 	OutputPath     string
 	Classification string
+	// Plays and Rating are populated only when a query joins the song_plays
+	// table (player queues, global shuffle).
+	Plays  int
+	Rating string
 }
 
 // Duration returns the length of the split in seconds.
@@ -140,6 +144,14 @@ func createSchema(db *sql.DB) error {
 			UNIQUE (playlist_id, split_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_playlist_splits_playlist ON playlist_splits(playlist_id);
+
+		CREATE TABLE IF NOT EXISTS song_plays (
+			split_id   INT PRIMARY KEY REFERENCES splits(id) ON DELETE CASCADE,
+			plays      INT NOT NULL DEFAULT 0,
+			rating     STRING NOT NULL DEFAULT '',
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS idx_song_plays_plays ON song_plays(plays);
 	`)
 	return err
 }
@@ -433,9 +445,11 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
 		 FROM splits s
 		 JOIN recordings r ON r.id = s.recording_id
+		 LEFT JOIN song_plays sp ON sp.split_id = s.id
 		 WHERE r.radio = $1
 		 ORDER BY random()
 		 LIMIT $2`,
@@ -449,11 +463,101 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.Plays, &s.Rating); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
 	}
 
 	return splits, rows.Err()
+}
+
+// fetchGlobalShuffleBatch returns up to limit splits for the global shuffle,
+// ordered least-listened first (fewest plays) with a random tiebreak so
+// repeated shuffles keep surfacing music the user has not heard yet. Splits
+// marked as commercials are skipped, as are any splits whose ids appear in
+// exclude (already played in the current shuffle session).
+func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+	if exclude == nil {
+		exclude = []int64{}
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, '')
+		 FROM splits s
+		 LEFT JOIN song_plays sp ON sp.split_id = s.id
+		 WHERE s.classification != $1 AND s.id != ALL($2::INT[])
+		 ORDER BY COALESCE(sp.plays, 0) ASC, random()
+		 LIMIT $3`,
+		classificationCommercial, exclude, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var splits []Split
+	for rows.Next() {
+		var s Split
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.Plays, &s.Rating); err != nil {
+			return nil, err
+		}
+		splits = append(splits, s)
+	}
+
+	return splits, rows.Err()
+}
+
+// recordPlay increments the play counter for a split, inserting a row the
+// first time it is heard.
+func recordPlay(splitID int64) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(
+		`INSERT INTO song_plays (split_id, plays) VALUES ($1, 1)
+		 ON CONFLICT (split_id) DO UPDATE SET plays = song_plays.plays + 1, updated_at = now()`,
+		splitID,
+	)
+	return err
+}
+
+// setRating records a like, dislike, or (when rating is "") clears the rating
+// for a split. Existing play counts are preserved.
+func setRating(splitID int64, rating string) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(
+		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 0, $2)
+		 ON CONFLICT (split_id) DO UPDATE SET rating = $2, updated_at = now()`,
+		splitID, rating,
+	)
+	return err
+}
+
+// fetchSongStats returns the play count and rating for a split, or zero values
+// when the split has never been played or rated.
+func fetchSongStats(splitID int64) (plays int, rating string, err error) {
+	if recordDB == nil {
+		return 0, "", fmt.Errorf("nil db")
+	}
+
+	err = recordDB.QueryRow(
+		`SELECT plays, rating FROM song_plays WHERE split_id = $1`,
+		splitID,
+	).Scan(&plays, &rating)
+	if err == sql.ErrNoRows {
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	return plays, rating, nil
 }
