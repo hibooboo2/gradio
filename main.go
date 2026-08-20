@@ -213,6 +213,14 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 	if err := r.rotate(); err != nil {
 		return err
 	}
+	defer func() {
+		perr := recover()
+		if err != nil {
+			slog.Error("PAnicked and recoverd", "perr", perr)
+		}
+
+		r.storeToDisk()
+	}()
 
 	buf := make([]byte, 64*1024)
 	total := int64(rotateTime.Seconds())
@@ -301,24 +309,37 @@ func (r *Recorder) write(p []byte) (int, error) {
 	return r.buffer.Write(p)
 }
 
+func (r *Recorder) storeToDisk() {
+	if r.buffer != nil {
+		if r.buffer.Len() < 1024*1024*1024*5 {
+			slog.Info("Not storing recording from buffer", "size", r.buffer.Len())
+			return
+		}
+		err := os.WriteFile(r.fullName, r.buffer.Bytes(), 0644)
+		if err != nil {
+			slog.Error("Failed to write file", "file", r.fullName)
+			return
+		}
+
+		info, err := os.Stat(r.fullName)
+		if err != nil {
+			slog.Error("stat closed recording ", "fileName", r.fullName, "err", err)
+		} else {
+			slog.Info("Recording to db", "name", r.fullName, "size", info.Size())
+			r.recordFileToDB(r.fullName, r.started, info.Size())
+		}
+	}
+}
+
 func (r *Recorder) rotate() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.buffer != nil {
-		os.WriteFile(r.fullName, r.buffer.Bytes(), 0o644)
-
-		info, err := os.Stat(r.fullName)
-		if err != nil {
-			log.Printf("stat closed recording %s: %v", r.fullName, err)
-		} else {
-			r.recordFileToDB(r.fullName, r.started, info.Size())
-		}
-	}
-
 	if err := os.MkdirAll(filepath.Join("recordings", r.radioName), 0755); err != nil {
 		return err
 	}
+
+	r.storeToDisk()
 
 	now := time.Now()
 
@@ -344,20 +365,7 @@ func (r *Recorder) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.buffer == nil {
-		return
-	}
-
-	if err := os.WriteFile(r.fullName, r.buffer.Bytes(), 0o644); err != nil {
-		log.Printf("write closed recording %s: %v", r.fullName, err)
-	}
-
-	info, err := os.Stat(r.fullName)
-	if err != nil {
-		log.Printf("stat closed recording %s: %v", r.fullName, err)
-	} else {
-		r.recordFileToDB(r.fullName, r.started, info.Size())
-	}
+	r.storeToDisk()
 
 	r.buffer = nil
 	r.fullName = ""
