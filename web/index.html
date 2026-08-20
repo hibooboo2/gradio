@@ -946,7 +946,7 @@
 				get repeat() { return repeat; },
 				get muted() { return audio.muted; },
 				get volume() { return audio.volume; },
-				get current() { return current(); },
+				current() { return current(); },
 				get sleepActive() { return sleepEndsAt !== null; },
 				get sleepRemaining() { return sleepEndsAt === null ? 0 : Math.max(0, sleepEndsAt - Date.now()); },
 				fmtTime,
