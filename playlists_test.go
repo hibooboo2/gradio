@@ -336,4 +336,26 @@ func TestStationsView(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	// The JS favorite button asks for JSON (Accept: application/json) so it can
+	// flip the star in place without re-rendering the whole list. The response
+	// is a minimal payload, not an HTML fragment.
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/favorite", nil)
+	req.Header.Set("Accept", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	require.JSONEq(t, `{"favorited": true, "uuid": "station-1"}`, rec.Body.String())
+
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/favorite", nil)
+	req.Header.Set("Accept", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"favorited": false, "uuid": "station-1"}`, rec.Body.String())
+
+	favs, err = fetchFavoriteUUIDs()
+	require.NoError(t, err)
+	require.Empty(t, favs)
 }

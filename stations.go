@@ -43,8 +43,8 @@ var stationsViewTemplate = template.Must(template.New("stations").Funcs(viewFunc
 			<td class="station-tags">{{if .Tags}}{{.Tags}}{{else}}&mdash;{{end}}</td>
 			<td class="station-actions">
 				<button class="station-fav" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					hx-post="/stations/{{.StationUUID}}/favorite" hx-target="#content" hx-swap="innerHTML"
-					hx-vals='{"view": "stations"}'
+					data-favorited="{{if .Favorited}}true{{else}}false{{end}}"
+					onclick="return handleToggleFavorite(event, '{{.StationUUID}}')"
 					{{if .Favorited}}title="Unfavorite"{{else}}title="Favorite"{{end}}>
 					{{if .Favorited}}&#11088;&#65039;{{else}}&#9734;{{end}}
 				</button>
@@ -98,8 +98,8 @@ var favoritesViewTemplate = template.Must(template.New("favorites").Funcs(viewFu
 			<td class="station-tags">{{if .Tags}}{{.Tags}}{{else}}&mdash;{{end}}</td>
 			<td class="station-actions">
 				<button class="station-fav" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					hx-post="/stations/{{.StationUUID}}/favorite" hx-target="#content" hx-swap="innerHTML"
-					hx-vals='{"view": "favorites"}'
+					data-favorited="true"
+					onclick="return handleToggleFavorite(event, '{{.StationUUID}}')"
 					title="Unfavorite">&#11088;&#65039;</button>
 				<button class="station-record" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
 					onclick="return handleStationRecord(event, '{{.StationUUID}}')"
@@ -199,8 +199,11 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleToggleFavorite favorites or unfavorites a station and re-renders the
-// view the request came from (?view=stations or ?view=favorites).
+// handleToggleFavorite favorites or unfavorites a station. When the client
+// asks for JSON (Accept: application/json or ?json=1) it returns a minimal
+// payload so the JS favorite button can flip the star in place without
+// re-rendering the whole list. Otherwise it re-renders the view the request
+// came from (?view=stations or ?view=favorites) for non-JS fallback.
 func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
 	if _, err := fetchRadioStationByUUID(uuid); err != nil {
@@ -220,7 +223,8 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := favs[uuid]; ok {
+	_, wasFavorited := favs[uuid]
+	if wasFavorited {
 		err = removeFavorite(uuid)
 	} else {
 		err = addFavorite(uuid)
@@ -228,6 +232,11 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.ErrorContext(r.Context(), "toggle favorite", "err", err, "uuid", uuid)
 		http.Error(w, "failed to update favorite", http.StatusInternalServerError)
+		return
+	}
+
+	if wantsJSON(r) {
+		writeJSON(w, http.StatusOK, map[string]any{"favorited": !wasFavorited, "uuid": uuid})
 		return
 	}
 

@@ -732,7 +732,10 @@
 			cursor: pointer;
 			border-radius: 8px;
 		}
+		.station-fav[data-favorited="false"] { color: var(--muted); }
+		.station-fav[data-favorited="true"] { color: #fbbf24; }
 		.station-fav:hover { background: rgba(251, 191, 36, 0.15); filter: none; }
+		.station-table tr.favorited { background: rgba(251, 191, 36, 0.06); }
 		.station-tags { color: var(--muted); max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 		.station-actions { text-align: right; white-space: nowrap; }
 		.station-record {
@@ -2024,6 +2027,76 @@
 				showToast('Failed to start recording for ' + stationName, 'error', 4000);
 			}
 			return false;
+		}
+
+		// ---------- Favorite toggle ----------
+		// Optimistically flips the star on the clicked station without
+		// re-rendering the whole list, so scroll position and the rest of the
+		// table stay put. The server answers with {"favorited": bool, "uuid": ..}
+		// when the request carries Accept: application/json.
+		async function handleToggleFavorite(event, uuid) {
+			event.preventDefault();
+			event.stopPropagation();
+			const btn = event.currentTarget;
+			try {
+				const res = await fetch('/stations/' + uuid + '/favorite', {
+					method: 'POST',
+					headers: { 'Accept': 'application/json' },
+				});
+				const data = await res.json().catch(() => ({}));
+				if (!res.ok) {
+					showToast((data && data.error) || 'Failed to update favorite', 'error', 4000);
+					return false;
+				}
+				const favorited = typeof data.favorited === 'boolean'
+					? data.favorited
+					: btn.getAttribute('data-favorited') !== 'true';
+				applyFavoriteState(btn, favorited);
+			} catch (err) {
+				showToast('Failed to update favorite', 'error', 4000);
+			}
+			return false;
+		}
+
+		// Flip the star button, the inline star next to the station name and
+		// the row highlight to match the new favorite state. In the Favorites
+		// view, unfavoriting removes the row (and shows the empty message when
+		// the last one goes) instead of reloading the list.
+		function applyFavoriteState(btn, favorited) {
+			btn.setAttribute('data-favorited', favorited ? 'true' : 'false');
+			btn.innerHTML = favorited ? '⭐️' : '☆';
+			btn.title = favorited ? 'Unfavorite' : 'Favorite';
+			const row = btn.closest('tr');
+			if (row) row.classList.toggle('favorited', favorited);
+
+			// Keep the inline star next to the station name in sync.
+			const nameCell = row && row.querySelector('td:first-child');
+			let star = nameCell && nameCell.querySelector('.station-star');
+			if (favorited) {
+				if (!star) {
+					star = document.createElement('span');
+					star.className = 'station-star';
+					star.title = 'Favorited';
+					star.textContent = '⭐';
+					const nameEl = nameCell.querySelector('.station-name');
+					if (nameEl) nameEl.after(star);
+				}
+			} else if (star) {
+				star.remove();
+			}
+
+			// In the Favorites view, unfavoriting removes the row from the DOM.
+			const activeTab = document.querySelector('.tab.active');
+			if (!favorited && activeTab && activeTab.getAttribute('data-tab') === 'favorites' && row) {
+				row.remove();
+				const table = document.querySelector('#content .station-table');
+				if (table && !table.querySelector('tbody tr')) {
+					const empty = document.createElement('p');
+					empty.className = 'empty';
+					empty.textContent = 'No favorite stations yet. Click the ☆ star next to a station on the Radio Stations tab to favorite it.';
+					table.replaceWith(empty);
+				}
+			}
 		}
 
 		document.body.addEventListener('htmx:afterSwap', (e) => {
