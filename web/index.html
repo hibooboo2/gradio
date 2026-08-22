@@ -823,6 +823,43 @@
 			font-size: 1rem;
 		}
 		.mini-close { font-size: 0.9rem; }
+
+		/* ---------- Toasts ---------- */
+		.toast-container {
+			position: fixed;
+			top: 1rem;
+			right: 1rem;
+			z-index: 9999;
+			display: flex;
+			flex-direction: column;
+			gap: 0.5rem;
+			pointer-events: none;
+			max-width: min(24rem, calc(100vw - 2rem));
+		}
+		.toast {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-left: 3px solid var(--accent);
+			border-radius: 10px;
+			padding: 0.7rem 0.95rem;
+			font-size: 0.85rem;
+			line-height: 1.4;
+			color: var(--text);
+			box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+			pointer-events: auto;
+			animation: toast-in 0.25s ease-out;
+		}
+		.toast.success { border-left-color: var(--accent-2); }
+		.toast.error { border-left-color: var(--danger); }
+		.toast.fade-out { animation: toast-out 0.3s ease-in forwards; }
+		@keyframes toast-in {
+			from { opacity: 0; transform: translateY(-0.5rem); }
+			to { opacity: 1; transform: translateY(0); }
+		}
+		@keyframes toast-out {
+			from { opacity: 1; transform: translateY(0); }
+			to { opacity: 0; transform: translateY(-0.5rem); }
+		}
 	</style>
 </head>
 <body>
@@ -875,6 +912,9 @@
 			<button id="mini-close" class="icon-btn mini-close" title="Close player">&#10005;</button>
 		</div>
 	</div>
+
+	<!-- Transient notifications in the upper right corner. -->
+	<div id="toast-container" class="toast-container"></div>
 
 	<script>
 		// ---------- Tab navigation ----------
@@ -1858,6 +1898,79 @@
 			// full player view, if present
 			const wrap = document.querySelector('[data-player-wrap]');
 			if (wrap) syncFullView(wrap);
+		}
+
+		// ---------- Toasts ----------
+		// Transient notification stacked in the upper right corner. Auto-removes
+		// after duration ms with a short fade-out.
+		function showToast(message, type, duration) {
+			type = type || 'info';
+			duration = duration || 3000;
+			let container = document.getElementById('toast-container');
+			if (!container) {
+				container = document.createElement('div');
+				container.id = 'toast-container';
+				container.className = 'toast-container';
+				document.body.appendChild(container);
+			}
+			const toast = document.createElement('div');
+			toast.className = 'toast ' + type;
+			toast.textContent = message;
+			container.appendChild(toast);
+			setTimeout(() => {
+				toast.classList.add('fade-out');
+				setTimeout(() => toast.remove(), 300);
+			}, duration);
+		}
+
+		// ---------- Record & Play ----------
+		// Starts recording a station and loads its queue into the persistent
+		// mini player without leaving the current tab. When the station has no
+		// songs yet, shows a toast instead of starting playback.
+		async function handleStationRecord(event, uuid) {
+			event.preventDefault();
+			event.stopPropagation();
+			const btn = event.currentTarget;
+			const stationName = (btn && btn.getAttribute('data-station-name')) || 'station';
+			try {
+				const res = await fetch('/stations/' + uuid + '/record', {
+					method: 'POST',
+					headers: { 'Accept': 'application/json' },
+				});
+				const data = await res.json().catch(() => ({}));
+				if (!res.ok) {
+					showToast((data && data.error) || 'Failed to start recording for ' + stationName, 'error', 4000);
+					return false;
+				}
+				if (data.queued) {
+					showToast('Queued for next slot for ' + (data.domain || 'this domain') + ' (position ' + (data.queue_position || 1) + ')', 'info', 4000);
+					return false;
+				}
+				const tracks = data.tracks || [];
+				if (tracks.length === 0) {
+					showToast('Recording started — no songs yet for ' + (data.station_name || stationName) + '. Check back after the first split.', 'info', 4000);
+					return false;
+				}
+				const normalized = tracks.map(t => ({
+					src: t.src,
+					title: t.title,
+					derivedTitle: t.derived_title || t.title,
+					customTitle: t.custom_title || '',
+					split: String(t.id),
+					start: t.start,
+					end: t.end,
+					classification: t.classification || '',
+					rating: t.rating || 0,
+					plays: t.plays || 0,
+					sub: Player.fmtTime(t.start) + ' – ' + Player.fmtTime(t.end) + ' · ' +
+						clsLabel(t.classification) + (t.plays ? ' · ♪ ' + t.plays : ''),
+				}));
+				Player.loadQueue(normalized, { queueKey: data.queue_key, source: data.source, autoplay: true });
+				Player.play();
+			} catch (err) {
+				showToast('Failed to start recording for ' + stationName, 'error', 4000);
+			}
+			return false;
 		}
 
 		document.body.addEventListener('htmx:afterSwap', (e) => {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // stationsViewTemplate renders the Radio Stations tab fragment: every station
@@ -47,10 +49,9 @@ var stationsViewTemplate = template.Must(template.New("stations").Funcs(viewFunc
 					{{if .Favorited}}&#11088;&#65039;{{else}}&#9734;{{end}}
 				</button>
 				<button class="station-record" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					hx-post="/stations/{{.StationUUID}}/record" hx-target="#content" hx-swap="innerHTML"
-					hx-on:click="selectTab('player')"
-					{{if .Recording}}disabled title="Already recording"{{else}}title="Record this station and play its songs"{{end}}>
-					{{if .Recording}}&#9889; Recording{{else}}&#128311; Record &amp; Play{{end}}
+					onclick="return handleStationRecord(event, '{{.StationUUID}}')"
+					{{if .Recording}}disabled title="Already recording"{{else if .Queued}}disabled title="Queued for the next recording slot for {{.Domain}}"{{else}}title="Record this station and play its songs"{{end}}>
+					{{if .Recording}}&#9889; Recording{{else if .Queued}}&#9203; Queued (position {{.QueuePos}} for {{.Domain}}){{else}}&#128311; Record &amp; Play{{end}}
 				</button>
 				<span class="station-status" id="status-{{.StationUUID}}"></span>
 			</td>
@@ -101,10 +102,9 @@ var favoritesViewTemplate = template.Must(template.New("favorites").Funcs(viewFu
 					hx-vals='{"view": "favorites"}'
 					title="Unfavorite">&#11088;&#65039;</button>
 				<button class="station-record" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					hx-post="/stations/{{.StationUUID}}/record" hx-target="#content" hx-swap="innerHTML"
-					hx-on:click="selectTab('player')"
-					{{if .Recording}}disabled title="Already recording"{{else}}title="Record this station and play its songs"{{end}}>
-					{{if .Recording}}&#9889; Recording{{else}}&#128311; Record &amp; Play{{end}}
+					onclick="return handleStationRecord(event, '{{.StationUUID}}')"
+					{{if .Recording}}disabled title="Already recording"{{else if .Queued}}disabled title="Queued for the next recording slot for {{.Domain}}"{{else}}title="Record this station and play its songs"{{end}}>
+					{{if .Recording}}&#9889; Recording{{else if .Queued}}&#9203; Queued (position {{.QueuePos}} for {{.Domain}}){{else}}&#128311; Record &amp; Play{{end}}
 				</button>
 				<span class="station-status" id="status-{{.StationUUID}}"></span>
 			</td>
@@ -122,6 +122,9 @@ type stationViewRow struct {
 	RadioStation
 	Recording bool
 	Favorited bool
+	Queued    bool
+	Domain    string
+	QueuePos  int
 }
 
 // stationsViewData is the data model for the Radio Stations / Favorites tab
@@ -150,10 +153,14 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 	rows := make([]stationViewRow, 0, len(stations))
 	for _, s := range stations {
 		_, faved := favs[s.StationUUID]
+		domain, pos := recorderManager.queueInfo(s.Name)
 		rows = append(rows, stationViewRow{
 			RadioStation: s,
 			Recording:    recorderManager.isRecording(s.Name),
 			Favorited:    faved,
+			Queued:       pos > 0,
+			Domain:       domain,
+			QueuePos:     pos,
 		})
 	}
 
@@ -175,10 +182,14 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]stationViewRow, 0, len(stations))
 	for _, s := range stations {
+		domain, pos := recorderManager.queueInfo(s.Name)
 		rows = append(rows, stationViewRow{
 			RadioStation: s,
 			Recording:    recorderManager.isRecording(s.Name),
 			Favorited:    true,
+			Queued:       pos > 0,
+			Domain:       domain,
+			QueuePos:     pos,
 		})
 	}
 
@@ -237,10 +248,39 @@ var stationNoSongsTemplate = template.Must(template.New("stationNoSongs").Funcs(
 </div>
 `))
 
+// stationRecordResponse is the JSON payload returned by
+// POST /stations/{uuid}/record when the client asks for JSON. It carries the
+// queue to load into the persistent mini player without swapping any HTML, so
+// the current tab is left untouched. When the station was queued behind
+// another station on the same domain, Queued is true and no tracks are
+// returned.
+type stationRecordResponse struct {
+	StationName   string         `json:"station_name"`
+	QueueKey      string         `json:"queue_key"`
+	Source        string         `json:"source"`
+	Tracks        []shuffleTrack `json:"tracks"`
+	Queued        bool           `json:"queued,omitempty"`
+	Domain        string         `json:"domain,omitempty"`
+	QueuePosition int            `json:"queue_position,omitempty"`
+}
+
+// wantsJSON reports whether the request asks for a JSON response, either via
+// the ?json=1 query parameter or an Accept: application/json header.
+func wantsJSON(r *http.Request) bool {
+	if r.URL.Query().Get("json") != "" {
+		return true
+	}
+	return strings.Contains(r.Header.Get("Accept"), "application/json")
+}
+
 // handleStationRecord starts recording the given station (if it is not already
-// being recorded) and then renders the player for the songs recorded so far.
-// When the station has no recorded songs yet, it shows a friendly message
-// instead of an empty player.
+// being recorded) and returns its queue so the client can start playback.
+//
+// When the client asks for JSON (Accept: application/json or ?json=1), the
+// response is a stationRecordResponse with the queue to load into the
+// persistent mini player — the current tab is never swapped or navigated away
+// from. Otherwise it renders the player for the songs recorded so far, or a
+// friendly message when the station has no recorded songs yet.
 func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 	station, err := fetchRadioStationByUUID(r.PathValue("uuid"))
 	if err != nil {
@@ -258,12 +298,61 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recorderManager.start(station.Name, station.URLResolved)
+	res := recorderManager.start(station.Name, station.URLResolved)
+
+	// The station was queued behind another station on the same domain. Tell
+	// the client without starting a recorder or loading a queue; the recorder
+	// will start automatically when the active station finishes.
+	if res.queued {
+		if wantsJSON(r) {
+			writeJSON(w, http.StatusOK, stationRecordResponse{
+				StationName:   station.Name,
+				QueueKey:      "radio:" + station.Name,
+				Source:        "Radio · " + station.Name,
+				Tracks:        []shuffleTrack{},
+				Queued:        true,
+				Domain:        res.domain,
+				QueuePosition: res.queuePosition,
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<div class="player-empty surface"><p class="empty">%s is queued for the next recording slot for %s (position %d).</p></div>`,
+			template.HTMLEscapeString(station.Name), template.HTMLEscapeString(res.domain), res.queuePosition)
+		return
+	}
 
 	splits, err := fetchRadioSplits(station.Name, radioQueueSize)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", station.Name)
 		http.Error(w, "failed to load radio", http.StatusInternalServerError)
+		return
+	}
+
+	// The JS Record & Play flow asks for JSON so it can load the queue into the
+	// persistent mini player without navigating away from the current tab.
+	if wantsJSON(r) {
+		resp := stationRecordResponse{
+			StationName: station.Name,
+			QueueKey:    "radio:" + station.Name,
+			Source:      "Radio · " + station.Name,
+			Tracks:      make([]shuffleTrack, 0, len(splits)),
+		}
+		for _, s := range splits {
+			resp.Tracks = append(resp.Tracks, shuffleTrack{
+				ID:             s.ID,
+				Title:          songTitle(s),
+				DerivedTitle:   derivedSongTitle(s),
+				CustomTitle:    s.CustomTitle,
+				Src:            musicURL(s.OutputPath),
+				Start:          s.Start,
+				End:            s.End,
+				Classification: s.Classification,
+				Plays:          s.Plays,
+				Rating:         s.Rating,
+			})
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 

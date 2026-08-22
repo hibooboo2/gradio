@@ -43,6 +43,26 @@ type recorderSet struct {
 	ctx       context.Context
 	g         *errgroup.Group
 	recorders map[string]*Recorder
+	// domains tracks which station is currently recording per registrable
+	// domain (eTLD+1), so only one station per domain records at a time.
+	domains map[string]string
+	// queues holds the FIFO of stations waiting for a recording slot on a
+	// domain that is already being recorded.
+	queues map[string][]queuedRecorder
+}
+
+// queuedRecorder is one station waiting for a recording slot on a domain.
+type queuedRecorder struct {
+	name string
+	url  string
+}
+
+// startResult describes the outcome of a recorderSet.start call.
+type startResult struct {
+	started       bool   // a recorder was actually started
+	queued        bool   // the station was added to its domain's queue
+	domain        string // registrable domain involved
+	queuePosition int    // 1-based position in the domain queue (0 when started)
 }
 
 // NewRecorderSet creates a recorder set bound to ctx. Every recorder started
@@ -54,22 +74,59 @@ func NewRecorderSet(ctx context.Context) *recorderSet {
 		ctx:       gctx,
 		g:         g,
 		recorders: map[string]*Recorder{},
+		domains:   map[string]string{},
+		queues:    map[string][]queuedRecorder{},
 	}
 }
 
 // start begins recording the named station if it is not already being
-// recorded. url may be empty when the station was already registered by the
-// -record flag loop.
-func (rs *recorderSet) start(name, url string) bool {
+// recorded. When another station on the same registrable domain is already
+// recording, the station is queued for the next free slot instead and the
+// returned startResult has queued=true. url may be empty when the station was
+// already registered by the -record flag loop.
+func (rs *recorderSet) start(name, url string) startResult {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	return rs.startLocked(name, url)
+}
+
+// startLocked is start with rs.mu already held.
+func (rs *recorderSet) startLocked(name, url string) startResult {
 	if _, ok := rs.recorders[name]; ok {
-		return false
+		return startResult{}
 	}
+	domain := domainForURL(url)
+	if domain == "" {
+		// No domain could be determined; start unrestricted.
+		rs.launchLocked(name, url, "")
+		return startResult{started: true}
+	}
+	if active, ok := rs.domains[domain]; ok {
+		// If the station is already queued for this domain, report its
+		// existing position instead of enqueueing it twice.
+		for i, q := range rs.queues[domain] {
+			if q.name == name {
+				return startResult{queued: true, domain: domain, queuePosition: i + 1}
+			}
+		}
+		rs.queues[domain] = append(rs.queues[domain], queuedRecorder{name: name, url: url})
+		slog.Info("Recorder queued for domain", "radio", name, "domain", domain, "active", active, "position", len(rs.queues[domain]))
+		return startResult{queued: true, domain: domain, queuePosition: len(rs.queues[domain])}
+	}
+	rs.launchLocked(name, url, domain)
+	return startResult{started: true, domain: domain}
+}
+
+// launchLocked registers and launches a recorder goroutine, marking the domain
+// as active. Callers must hold rs.mu.
+func (rs *recorderSet) launchLocked(name, url, domain string) {
 	ctx, cancel := context.WithCancel(rs.ctx)
 	slog.InfoContext(ctx, "Recorder set starting", "radio", name, "url", url)
-	rec := &Recorder{url: url, radioName: name, cancel: cancel}
+	rec := &Recorder{url: url, radioName: name, cancel: cancel, domain: domain}
 	rs.recorders[name] = rec
+	if domain != "" {
+		rs.domains[domain] = name
+	}
 	rs.g.Go(func() error {
 		defer rs.deleteRecorder(name)
 		slog.InfoContext(ctx, "Starting recorder", "radio", name, "url", url)
@@ -83,17 +140,58 @@ func (rs *recorderSet) start(name, url string) bool {
 		slog.InfoContext(ctx, "RecordOnce finished no error")
 		return nil
 	})
-	return true
 }
 
+// deleteRecorder stops and removes the named recorder, then starts the next
+// station queued for the same domain (if any) so only one station per domain
+// records at a time.
 func (rs *recorderSet) deleteRecorder(name string) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 	rec, ok := rs.recorders[name]
 	if ok && rec.cancel != nil {
 		rec.cancel()
 	}
 	delete(rs.recorders, name)
-	rs.mu.Unlock()
+	if !ok {
+		return
+	}
+	rs.releaseDomainLocked(name, rec.domain)
+}
+
+// releaseDomainLocked frees the recording slot for domain when it is held by
+// the just-removed recorder, then starts the next queued station (if any).
+// When the slot is held by a different recorder (e.g. a bulk -record recorder
+// on the same domain), the domain and its queue are left untouched so only one
+// station per domain records at a time. Callers must hold rs.mu.
+func (rs *recorderSet) releaseDomainLocked(name, domain string) {
+	if domain == "" {
+		return
+	}
+	if active, ok := rs.domains[domain]; !ok || active != name {
+		return
+	}
+	delete(rs.domains, domain)
+	if next := rs.popNextLocked(domain); next != nil {
+		rs.startLocked(next.name, next.url)
+	}
+}
+
+// popNextLocked removes and returns the head of the domain's queue, or nil
+// when the queue is empty. Callers must hold rs.mu.
+func (rs *recorderSet) popNextLocked(domain string) *queuedRecorder {
+	q := rs.queues[domain]
+	if len(q) == 0 {
+		delete(rs.queues, domain)
+		return nil
+	}
+	next := q[0]
+	if len(q) == 1 {
+		delete(rs.queues, domain)
+	} else {
+		rs.queues[domain] = q[1:]
+	}
+	return &next
 }
 
 // wait blocks until every recorder started through the set has finished.
@@ -119,15 +217,27 @@ func (rs *recorderSet) stop(name string) {
 func (rs *recorderSet) register(name string, rec *Recorder) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	if rec.domain == "" {
+		rec.domain = domainForURL(rec.url)
+	}
 	rs.recorders[name] = rec
+	if rec.domain != "" {
+		rs.domains[rec.domain] = name
+	}
 }
 
 // unregister removes a recorder that has finished, so the station can be
-// recorded again later.
+// recorded again later. If other stations are queued for the same domain, the
+// next one is started immediately.
 func (rs *recorderSet) unregister(name string) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rec, ok := rs.recorders[name]
 	delete(rs.recorders, name)
-	rs.mu.Unlock()
+	if !ok {
+		return
+	}
+	rs.releaseDomainLocked(name, rec.domain)
 }
 
 // isRecording reports whether the named station is currently being recorded.
@@ -136,6 +246,55 @@ func (rs *recorderSet) isRecording(name string) bool {
 	_, ok := rs.recorders[name]
 	rs.mu.Unlock()
 	return ok
+}
+
+// isRecordingDomain reports whether any station on the given registrable
+// domain is currently being recorded.
+func (rs *recorderSet) isRecordingDomain(domain string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	_, ok := rs.domains[domain]
+	return ok
+}
+
+// queueInfo returns the registrable domain and 1-based queue position for the
+// named station, or ("", 0) when it is not queued.
+func (rs *recorderSet) queueInfo(name string) (domain string, position int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for d, q := range rs.queues {
+		for i, n := range q {
+			if n.name == name {
+				return d, i + 1
+			}
+		}
+	}
+	return "", 0
+}
+
+// domainStatus is one active domain with its queued stations, for the
+// /api/record-domains endpoint.
+type domainStatus struct {
+	Domain string   `json:"domain"`
+	Active string   `json:"active_station"`
+	Queued []string `json:"queued_stations"`
+}
+
+// domainStatuses returns a snapshot of every domain currently being recorded
+// and the stations queued behind it.
+func (rs *recorderSet) domainStatuses() []domainStatus {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	out := make([]domainStatus, 0, len(rs.domains))
+	for d, active := range rs.domains {
+		q := rs.queues[d]
+		names := make([]string, 0, len(q))
+		for _, n := range q {
+			names = append(names, n.name)
+		}
+		out = append(out, domainStatus{Domain: d, Active: active, Queued: names})
+	}
+	return out
 }
 
 func main() {
@@ -277,6 +436,7 @@ type Recorder struct {
 	mu        sync.Mutex
 	url       string
 	radioName string
+	domain    string
 	buffer    *bytes.Buffer
 	filename  string
 	started   time.Time

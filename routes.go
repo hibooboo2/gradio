@@ -106,6 +106,10 @@ func routes() http.Handler {
 	// Global shuffle queue (JSON) for the player's Shuffle All mode.
 	mux.HandleFunc("GET /api/shuffle", handleShuffleJSON)
 
+	// Domain recording status (JSON): which domains are recording and which
+	// stations are queued behind them.
+	mux.HandleFunc("GET /api/record-domains", handleRecordDomainsJSON)
+
 	// htmx fragments.
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
 	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
@@ -231,6 +235,12 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, split)
+}
+
+// handleRecordDomainsJSON reports which domains are currently being recorded
+// and which stations are queued behind them.
+func handleRecordDomainsJSON(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, recorderManager.domainStatuses())
 }
 
 // handleRecordPlay records that a split was listened to, incrementing its play
