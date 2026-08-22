@@ -1737,11 +1737,35 @@
 			} catch (err) { wrap.replaceWith(titleEl); }
 		}
 
+		// Build a player track object from a split returned by the merge API.
+		// The backend serializes Split structs with Go field names; the display
+		// title falls back to the currently playing track's label.
+		function splitToTrack(s, fallback) {
+			const src = '/music/' + String(s.OutputPath || '').replace(/^split_music\//, '');
+			const derived = (fallback && (fallback.derivedTitle || fallback.title)) || 'Merged track';
+			const title = s.custom_title || derived;
+			return {
+				src: src,
+				title: title,
+				derivedTitle: derived,
+				customTitle: s.custom_title || '',
+				split: String(s.ID),
+				start: s.Start,
+				end: s.End,
+				classification: s.Classification || '',
+				rating: (fallback && fallback.rating) || 0,
+				plays: (fallback && fallback.plays) || 0,
+				sub: Player.fmtTime(s.Start) + ' – ' + Player.fmtTime(s.End) + ' · ' +
+					clsLabel(s.Classification || ''),
+			};
+		}
+
 		// Merge the currently playing split with its neighbor (prev=true joins
 		// the previous split on to it; prev=false joins the next split on to
-		// it), marking both source splits re_split and creating one merged
-		// split. Shows a brief green success state on the button that was
-		// clicked and reports errors in the resplit status line.
+		// it), marking the source split(s) re_split and creating one merged
+		// split. The merged track replaces the source track(s) in the queue and
+		// starts playing immediately. Shows a brief green success state on the
+		// button that was clicked and reports errors in the resplit status line.
 		function bindMergeButton(wrap, btn, prev, doneLabel) {
 			btn.addEventListener('click', async () => {
 				const cur = Player.current();
@@ -1760,14 +1784,43 @@
 						if (statusEl) statusEl.textContent = (data && data.error) ? data.error : 'Failed to merge';
 						return;
 					}
-					if (statusEl) statusEl.textContent = 'Merged — refresh the playlist to hear the combined track.';
+					const data = await res.json();
+					const merged = data && data.merged;
+					if (!merged || !merged.OutputPath) {
+						if (statusEl) statusEl.textContent = 'Failed to merge';
+						return;
+					}
+					// Replace the current track (and the merged-away neighbor,
+					// if any) with the merged track and play it.
+					const track = splitToTrack(merged, cur);
+					const curSplit = String(cur.split);
+					const otherSplit = data.other && data.other.ID ? String(data.other.ID) : null;
+					const queue = Player.queue.slice();
+					const remove = [];
+					queue.forEach((t, i) => {
+						if (String(t.split) === curSplit || (otherSplit && String(t.split) === otherSplit)) remove.push(i);
+					});
+					remove.sort((a, b) => b - a);
+					for (const i of remove) queue.splice(i, 1);
+					const insertAt = Math.min(Player.index, queue.length);
+					queue.splice(insertAt, 0, track);
+					Player.queue.length = 0;
+					Player.queue.push(...queue);
+					Player.setShuffle(Player.shuffle);
+					Player.playAt(insertAt);
+					const ul = wrap.querySelector('[data-player-queue]');
+					if (ul) renderQueueList(ul, Player.queue);
+					if (statusEl) statusEl.textContent = 'Merged — playing the combined track.';
 					btn.textContent = doneLabel;
 					btn.classList.add('success');
 					setTimeout(() => {
 						btn.textContent = label;
 						btn.classList.remove('success');
 					}, 2000);
-				} catch (err) { if (statusEl) statusEl.textContent = 'Failed to merge'; }
+				} catch (err) {
+					if (statusEl) statusEl.textContent = 'Failed to merge';
+					showToast('Failed to merge', 'error');
+				}
 			});
 		}
 

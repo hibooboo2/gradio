@@ -465,86 +465,295 @@ func boundaryMatch(a, b float64) bool {
 	return math.Abs(a-b) < 0.01
 }
 
-// mergeSplit joins the given split with the split that comes immediately
-// before (prev=true) or after (prev=false) it in the same source recording,
-// then stores a single merged split in their place. Both source splits are
-// marked re_split. The merged output is extracted from the original recording
-// (not from either source file) so the combined boundaries are exact.
-//
-// A song whose end was cut too soon should be merged with the split that came
-// after it (prev=false); a song whose start was cut too soon should be merged
-// with the split that came before it (prev=true).
-func mergeSplit(ctx context.Context, splitID int64, prev bool) (current Split, other Split, merged Split, err error) {
-	cur, err := fetchSplit(splitID)
-	if err != nil {
-		return Split{}, Split{}, Split{}, err
-	}
-	if cur.Classification == classificationReSplit {
-		return Split{}, Split{}, Split{}, fmt.Errorf("split %d is already re_split", splitID)
-	}
+// mergeWindowSeconds is how far before/after a split the merge logic looks for
+// the next silence boundary in the source recording.
+const mergeWindowSeconds = 180.0
 
+// findAdjacentSplit returns the split that comes immediately before (prev=true)
+// or after (prev=false) the given split in the same source recording, matching
+// by boundary position.
+func findAdjacentSplit(cur Split, prev bool) (Split, error) {
 	splits, err := fetchSplitsForRecording(cur.RecordingID)
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("fetch recording splits: %w", err)
+		return Split{}, fmt.Errorf("fetch recording splits: %w", err)
 	}
 
-	// Find the adjacent split by matching its boundary to the current one.
-	var adj Split
-	found := false
 	for _, s := range splits {
 		if s.ID == cur.ID {
 			continue
 		}
 		if prev && boundaryMatch(s.End, cur.Start) {
-			adj = s
-			found = true
-			break
+			return s, nil
 		}
 		if !prev && boundaryMatch(s.Start, cur.End) {
-			adj = s
-			found = true
-			break
+			return s, nil
 		}
-	}
-	if !found {
-		dir := "next"
-		if prev {
-			dir = "previous"
-		}
-		return Split{}, Split{}, Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, splitID, dir)
-	}
-	if adj.Classification == classificationReSplit {
-		return Split{}, Split{}, Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
 	}
 
-	var start, end float64
+	dir := "next"
 	if prev {
-		start, end = adj.Start, cur.End
-	} else {
-		start, end = cur.Start, adj.End
+		dir = "previous"
+	}
+	return Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, cur.ID, dir)
+}
+
+// detectSilenceWindow runs ffmpeg silencedetect on a slice of the input file
+// between windowStart and windowEnd (absolute positions in the source stream),
+// so only a few minutes of audio are analyzed instead of the whole recording.
+// The returned silences carry absolute stream positions.
+//
+// The -ss/-to options are placed before -i, which makes ffmpeg do a fast
+// (keyframe) seek: it jumps to the nearest keyframe at or before windowStart
+// and reports timestamps relative to that seek point, so the +windowStart
+// offset below converts them back to absolute stream positions. Empirically
+// this offset is accurate to well under a frame for MP3 sources (frame
+// granularity ~26ms). The known edge case is a silence that straddles
+// windowStart: the seek lands on the keyframe before windowStart, so that
+// silence can be reported slightly early or late and may be missed entirely
+// if it falls just outside the window. Using -ss as an output option
+// (-i input -ss windowStart -t duration) would give an accurate seek with
+// absolute timestamps (no offset needed), but ffmpeg then decodes the whole
+// file from the start, which is far too slow for long recordings, so the
+// fast-seek form is kept deliberately.
+func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, windowEnd float64) (chan silence, error) {
+	cmd := exec.CommandContext(
+		ctx,
+		"ffmpeg",
+		"-hide_banner",
+		"-ss", formatTime(windowStart),
+		"-to", formatTime(windowEnd),
+		"-i", inputPath,
+		"-af", fmt.Sprintf(
+			"silencedetect=noise=%s:d=%s",
+			silenceNoise,
+			silenceDuration,
+		),
+		"-f", "null",
+		"-",
+	)
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start ffmpeg: %w", err)
+	}
+
+	silences := make(chan silence)
+	go func() {
+		var currentStart *float64
+		defer close(silences)
+
+		scanner := bufio.NewScanner(stderr)
+		var lastLine string
+		for scanner.Scan() {
+			line := scanner.Text()
+			lastLine = line
+			if m := silenceStartRE.FindStringSubmatch(line); m != nil {
+				start, err := strconv.ParseFloat(m[1], 64)
+				if err != nil {
+					continue
+				}
+				currentStart = &start
+				continue
+			}
+
+			if m := silenceEndRE.FindStringSubmatch(line); m != nil && currentStart != nil {
+				end, err := strconv.ParseFloat(m[1], 64)
+				if err != nil {
+					continue
+				}
+				// ffmpeg resets timestamps to zero at the seek point (the
+				// keyframe at or before windowStart), so the detected
+				// positions are relative to it; add windowStart to convert
+				// them back to absolute stream positions.
+				silences <- silence{Start: *currentStart + windowStart, End: end + windowStart}
+				currentStart = nil
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			slog.Error("scan ffmpeg", "stderr", err)
+		}
+
+		if err := cmd.Wait(); err != nil {
+			slog.Error("silence detection errored", "err", err, "lastLine", lastLine, "inputPath", inputPath)
+		}
+	}()
+
+	return silences, nil
+}
+
+// findSplitByBounds returns the split of the same recording that spans exactly
+// the given boundaries (within float tolerance), excluding the current split.
+// It is used to detect when a silence-expanded merge absorbs an existing split
+// whose audio is now fully contained in the merged output.
+func findSplitByBounds(cur Split, start, end float64) (Split, bool) {
+	splits, err := fetchSplitsForRecording(cur.RecordingID)
+	if err != nil {
+		slog.Error("find split by bounds", "err", err, "recording", cur.RecordingID, "start", start, "end", end)
+		return Split{}, false
+	}
+	for _, s := range splits {
+		if s.ID == cur.ID {
+			continue
+		}
+		if boundaryMatch(s.Start, start) && boundaryMatch(s.End, end) {
+			return s, true
+		}
+	}
+	return Split{}, false
+}
+
+// findSplitsWithinBounds returns the splits of the same recording that are
+// fully contained within [newStart, newEnd], excluding the current split, the
+// merged split, and any split already marked re_split. A silence-expanded
+// merge can absorb more than just the adjacent split (e.g. several short
+// splits between the found silence and the current split), so every contained
+// split must be marked re_split or it would remain playable and overlap the
+// merged output.
+func findSplitsWithinBounds(cur Split, mergedID int64, newStart, newEnd float64) []Split {
+	splits, err := fetchSplitsForRecording(cur.RecordingID)
+	if err != nil {
+		slog.Error("find splits within bounds", "err", err, "recording", cur.RecordingID, "start", newStart, "end", newEnd)
+		return nil
+	}
+	var contained []Split
+	for _, s := range splits {
+		if s.ID == cur.ID || s.ID == mergedID {
+			continue
+		}
+		if s.Classification == classificationReSplit {
+			continue
+		}
+		if s.Start >= newStart && s.End <= newEnd {
+			contained = append(contained, s)
+		}
+	}
+	return contained
+}
+
+// mergeSplit expands the given split to the next silence in the requested
+// direction within its source recording, then stores a single expanded split in
+// its place. The original split is marked re_split.
+//
+// prev=true expands the start leftwards to the silence immediately before the
+// split (joining the previous split's audio); prev=false expands the end
+// rightwards to the silence immediately after the split (joining the next
+// split's audio). The expanded output is extracted from the original recording
+// (not from any existing split file) so the new boundaries are exact.
+//
+// When no silence is found in the window, the split is merged with its adjacent
+// split instead (the previous behavior), so a split with no real silence nearby
+// can still be joined with its neighbor. In that fallback case other holds the
+// adjacent split; in the silence-expansion case other is nil.
+func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other *Split, merged Split, err error) {
+	cur, err := fetchSplit(id)
+	if err != nil {
+		return Split{}, nil, Split{}, err
+	}
+	if cur.Classification == classificationReSplit {
+		return Split{}, nil, Split{}, fmt.Errorf("split %d is already re_split", id)
+	}
+
+	// Go back to the source recording this split came from and expand its
+	// boundaries to the next silence in the requested direction.
+	rec, err := fetchRecordingByID(cur.RecordingID)
+	if err != nil {
+		return Split{}, nil, Split{}, fmt.Errorf("fetch recording: %w", err)
 	}
 
 	wd, _ := os.Getwd()
-	inputPath := cur.SourcePath
+	inputPath := rec.SourcePath
 	if !filepath.IsAbs(inputPath) {
 		inputPath = filepath.Join(wd, inputPath)
 	}
 
+	// Look a few minutes around the split, biased toward the direction being
+	// expanded: prev looks before cur.Start, next looks after cur.End.
+	var windowStart, windowEnd float64
+	if prev {
+		windowStart = math.Max(0, cur.Start-mergeWindowSeconds)
+		windowEnd = cur.Start
+	} else {
+		windowStart = cur.End
+		windowEnd = cur.End + mergeWindowSeconds
+	}
+
+	// Find the silence boundary closest to the split in the requested
+	// direction: for prev, the silence whose end is just before cur.Start; for
+	// next, the silence whose start is just after cur.End.
+	var found *silence
+	if windowEnd > windowStart {
+		silences, err := detectSilenceWindow(ctx, inputPath, windowStart, windowEnd)
+		if err != nil {
+			return Split{}, nil, Split{}, fmt.Errorf("detect silence window: %w", err)
+		}
+		for s := range silences {
+			if prev {
+				if s.End < cur.Start && (found == nil || s.End > found.End) {
+					ss := s
+					found = &ss
+				}
+			} else {
+				if s.Start > cur.End && (found == nil || s.Start < found.Start) {
+					ss := s
+					found = &ss
+				}
+			}
+		}
+	}
+
+	var start, end float64
+	if found != nil {
+		if prev {
+			start, end = found.Start, cur.End
+			// Expanding leftwards absorbs the split that ran up to cur.Start.
+			if adj, ok := findSplitByBounds(cur, found.Start, cur.Start); ok {
+				other = &adj
+			}
+		} else {
+			start, end = cur.Start, found.End
+			// Expanding rightwards absorbs the split that began at cur.End.
+			if adj, ok := findSplitByBounds(cur, cur.End, found.End); ok {
+				other = &adj
+			}
+		}
+	} else {
+		// No silence in the window: fall back to merging with the adjacent
+		// split so a split with no real silence nearby can still be joined.
+		adj, err := findAdjacentSplit(cur, prev)
+		if err != nil {
+			return Split{}, nil, Split{}, err
+		}
+		if adj.Classification == classificationReSplit {
+			return Split{}, nil, Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
+		}
+		other = &adj
+		if prev {
+			start, end = adj.Start, cur.End
+		} else {
+			start, end = cur.Start, adj.End
+		}
+	}
+
 	positions, err := nextSplitPositions(cur.RecordingID, 1)
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("allocate split position: %w", err)
+		return Split{}, nil, Split{}, fmt.Errorf("allocate split position: %w", err)
 	}
 
 	radio := radioFromPath(cur.SourcePath)
 	// Prefer the original station name from the recordings table: the source
 	// path's directory is a hash, not the display name.
-	if rec, err := fetchRecordingByID(cur.RecordingID); err == nil {
+	if rec.Radio != "" {
 		radio = rec.Radio
 	}
 
 	out, err := writeSegment(ctx, radio, inputPath, start, end, positions[0])
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("write merged segment: %w", err)
+		return Split{}, nil, Split{}, fmt.Errorf("write merged segment: %w", err)
 	}
 
 	merged = Split{
@@ -556,22 +765,43 @@ func mergeSplit(ctx context.Context, splitID int64, prev bool) (current Split, o
 		OutputPath:     out,
 		Classification: cur.Classification,
 	}
+	// insertSplit takes a value copy, so compute the deterministic id here to
+	// keep merged.ID available for the re_split marking below.
+	merged.ID = splitID(merged.SourcePath, merged.Start, merged.End)
 	if err := insertSplit(merged); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("store merged split: %w", err)
+		return Split{}, nil, Split{}, fmt.Errorf("store merged split: %w", err)
 	}
 
-	// Mark both source splits re_split only after the merged split exists so a
-	// failure leaves them fully playable.
+	// Mark the source split(s) re_split only after the merged split exists so a
+	// failure leaves them fully playable. These mutations are not wrapped in a
+	// single transaction: a crash between the insert and the marks leaves the
+	// source split(s) playable alongside the merged split (overlapping audio),
+	// which is non-destructive — no data is lost and the overlap can be
+	// resolved by re-merging or deleting the merged split.
 	cur.Classification = classificationReSplit
 	if err := updateSplit(cur); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("mark split re_split: %w", err)
+		return Split{}, nil, Split{}, fmt.Errorf("mark split re_split: %w", err)
 	}
-	adj.Classification = classificationReSplit
-	if err := updateSplit(adj); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
+	if other != nil {
+		other.Classification = classificationReSplit
+		if err := updateSplit(*other); err != nil {
+			return Split{}, nil, Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
+		}
 	}
 
-	return cur, adj, merged, nil
+	// A silence-expanded merge can absorb more than just the adjacent split:
+	// any split fully contained in the merged range is now subsumed by the
+	// merged output and must be marked re_split too, or it would remain
+	// playable and overlap the merged split. cur and other are already
+	// re_split in the DB by now, so they are skipped.
+	for _, s := range findSplitsWithinBounds(cur, merged.ID, start, end) {
+		s.Classification = classificationReSplit
+		if err := updateSplit(s); err != nil {
+			slog.Error("mark contained split re_split", "err", err, "split", s.ID, "merged", merged.ID)
+		}
+	}
+
+	return cur, other, merged, nil
 }
 
 func detectSilence(ctx context.Context, inputPath string) (chan silence, error) {
