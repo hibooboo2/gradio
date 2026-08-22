@@ -26,6 +26,7 @@ func TestPageURLsServeShell(t *testing.T) {
 		"/history", "/history?sort=frequency&group=radio",
 		"/player?playlist=123&song=456",
 		"/playlists?expand=99",
+		"/active",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.SetBasicAuth(testUsername, testPassword)
@@ -257,6 +258,33 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	require.Contains(t, frag, "data-player-merge-prev")
 	require.Contains(t, frag, "data-player-merge-next")
 	resp.Body.Close()
+}
+
+// TestActiveRecordingsEndpoints covers the Active Recordings tab fragment and
+// its JSON API. With no recorder set running they render the empty state.
+func TestActiveRecordingsEndpoints(t *testing.T) {
+	resetAuthTables(t)
+	mux := routes()
+
+	// The fragment renders the empty state when nothing is recording.
+	req := authedRequest(t, http.MethodGet, "/active/view", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "No active recordings")
+
+	// The JSON API returns empty active/queued lists.
+	req = authedRequest(t, http.MethodGet, "/api/active-recordings", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out struct {
+		Active []activeRecorder     `json:"active"`
+		Queued []queuedRecorderView `json:"queued"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
+	require.Empty(t, out.Active)
+	require.Empty(t, out.Queued)
 }
 
 func splitByIndex(t *testing.T, splits []Split, index int) Split {

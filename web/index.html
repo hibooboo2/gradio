@@ -752,6 +752,28 @@
 		.station-record:disabled { background: var(--panel-2); color: var(--muted); cursor: default; opacity: 1; }
 		.station-status { color: var(--accent-2); font-size: 0.8rem; margin-left: 0.5rem; }
 
+		/* ---------- Active Recordings tab ---------- */
+		.active-table td:last-child { font-family: inherit; }
+		.rec-indicator {
+			width: 0.6rem;
+			height: 0.6rem;
+			flex-shrink: 0;
+			border-radius: 50%;
+			background: var(--danger);
+			box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+			animation: rec-pulse 1.6s ease-out infinite;
+		}
+		.rec-indicator.queued {
+			background: var(--not-song);
+			box-shadow: none;
+			animation: none;
+		}
+		@keyframes rec-pulse {
+			0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+			70% { box-shadow: 0 0 0 0.5rem rgba(239, 68, 68, 0); }
+			100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+		}
+
 		/* ---------- Mini player ---------- */
 		.mini-player {
 			position: fixed;
@@ -905,6 +927,9 @@
 			<button class="tab" data-tab="stations" data-title="Radio Stations" data-subtitle="Record and play live stations" data-controls="false"
 				hx-get="/stations/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/stations"
 				hx-on:click="selectTab('stations')">Radio Stations</button>
+			<button class="tab" data-tab="active" data-title="Active Recordings" data-subtitle="Stations recording right now" data-controls="false"
+				hx-get="/active/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/active"
+				hx-on:click="selectTab('active')">● Active</button>
 			<button class="tab" data-tab="favorites" data-title="Favorite Radio Stations" data-subtitle="Your favorited stations" data-controls="false"
 				hx-get="/favorites/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/favorites"
 				hx-on:click="selectTab('favorites')">Favorites</button>
@@ -960,6 +985,23 @@
 			document.getElementById('page-title').textContent = tab.dataset.title;
 			document.getElementById('page-subtitle').textContent = tab.dataset.subtitle;
 			document.getElementById('controls').style.display = tab.dataset.controls === 'true' ? '' : 'none';
+			if (name === 'active') startActivePoll(); else stopActivePoll();
+		}
+
+		// While the Active Recordings tab is open, re-fetch its fragment every
+		// few seconds so the live list stays current without a manual refresh.
+		// The poll stops as soon as the user switches to another tab.
+		let activePollTimer = null;
+		function stopActivePoll() {
+			if (activePollTimer) { clearInterval(activePollTimer); activePollTimer = null; }
+		}
+		function startActivePoll() {
+			stopActivePoll();
+			activePollTimer = setInterval(() => {
+				const tab = document.querySelector('.tab.active');
+				if (!tab || tab.getAttribute('data-tab') !== 'active') { stopActivePoll(); return; }
+				htmx.ajax('GET', '/active/view', '#content');
+			}, 5000);
 		}
 
 		// Load the view that matches the current URL. The fragment endpoints
@@ -975,6 +1017,9 @@
 			} else if (path.startsWith('/playlists')) {
 				tab = 'playlists';
 				frag = '/playlists/view' + window.location.search;
+			} else if (path.startsWith('/active')) {
+				tab = 'active';
+				frag = '/active/view';
 			} else if (path.startsWith('/stations')) {
 				tab = 'stations';
 				frag = '/stations/view';

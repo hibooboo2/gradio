@@ -46,7 +46,10 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /splits                splits view
 //	GET    /player                player view
 //	GET    /playlists             play lists view
+//	GET    /stations              radio stations view
+//	GET    /favorites             favorite stations view
 //	GET    /history               play history view
+//	GET    /active                active recordings view
 //
 // JSON API backed directly by the cockroach tables:
 //
@@ -58,6 +61,7 @@ func serveAPI(ctx context.Context, addr string) error {
 // GET    /api/radios            list radios with playable splits
 // GET    /api/shuffle           next global-shuffle batch (?exclude=ids)
 // GET    /api/history           play history (?sort=recency|frequency, ?group=radio, ?limit=N)
+// GET    /api/active-recordings active recordings and queued stations
 //
 // Splits/recordings detail API:
 //
@@ -75,6 +79,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /playlists/view         play lists tab fragment
 //	GET    /player/view            player tab fragment (?shuffle=1, ?playlist=.. or ?radio=..)
 //	GET    /history/view           play history tab fragment (?sort=.., ?group=radio, ?limit=N)
+//	GET    /active/view            active recordings tab fragment
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
@@ -90,6 +95,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /stations", serveIndex)
 	mux.HandleFunc("GET /favorites", serveIndex)
 	mux.HandleFunc("GET /history", serveIndex)
+	mux.HandleFunc("GET /active", serveIndex)
 
 	// JSON API backed directly by the cockroach tables.
 	mux.HandleFunc("GET /api/splits", handleListSplits)
@@ -115,6 +121,10 @@ func routes() http.Handler {
 	// stations are queued behind them.
 	mux.HandleFunc("GET /api/record-domains", handleRecordDomainsJSON)
 
+	// Active recordings (JSON): stations currently being recorded plus the
+	// stations queued behind a busy domain.
+	mux.HandleFunc("GET /api/active-recordings", handleActiveRecordingsJSON)
+
 	// htmx fragments.
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
 	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
@@ -122,6 +132,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /stations/view", handleStationsView)
 	mux.HandleFunc("GET /favorites/view", handleFavoritesView)
 	mux.HandleFunc("GET /history/view", handleHistoryView)
+	mux.HandleFunc("GET /active/view", handleActiveView)
 	mux.HandleFunc("POST /stations/{uuid}/record", handleStationRecord)
 	mux.HandleFunc("POST /stations/{uuid}/favorite", handleToggleFavorite)
 
