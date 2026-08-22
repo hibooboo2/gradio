@@ -229,3 +229,106 @@ func TestRadioPlayback(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "RadioA")
 }
+
+// TestStationsView covers the Radio Stations tab: the station list fragment
+// and the record-and-play endpoint (with its no-songs-yet fallback).
+func TestStationsView(t *testing.T) {
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	require.NoError(t, upsertRadioStations([]RadioStation{
+		{StationUUID: "station-1", Name: "Alpha FM", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
+		{StationUUID: "station-2", Name: "Beta Radio", URLResolved: "https://b.example/stream", CountryCode: "DE", LanguageCodes: "ger"},
+	}))
+
+	mux := routes()
+
+	// The stations view lists every station with a record button.
+	req := authedRequest(t, http.MethodGet, "/stations/view", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "station-table")
+	require.Contains(t, body, "Alpha FM")
+	require.Contains(t, body, "Beta Radio")
+	require.Contains(t, body, "station-1")
+	require.Contains(t, body, "Record &amp; Play")
+
+	// Clicking a station with no recorded songs starts recording and shows the
+	// no-songs message instead of an empty player.
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/record", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.Contains(t, body, "No songs for Alpha FM yet.")
+	require.True(t, recorderManager.isRecording("Alpha FM"), "station should be recording after the click")
+	recorderManager.stop("Alpha FM")
+
+	// Recording is idempotent: a second click does not error.
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/record", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// An unknown station is a 404.
+	req = authedRequest(t, http.MethodPost, "/stations/nope/record", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Favorite station-1 and verify it shows a star and lands on the Favorites
+	// tab.
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/favorite?view=stations", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.Contains(t, body, "station-star")
+	require.Contains(t, body, "station-1")
+
+	favs, err := fetchFavoriteUUIDs()
+	require.NoError(t, err)
+	require.True(t, favs["station-1"])
+	require.NotContains(t, favs, "station-2")
+
+	// The Favorites tab lists only favorited stations.
+	req = authedRequest(t, http.MethodGet, "/favorites/view", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.Contains(t, body, "Favorite Radio Stations")
+	require.Contains(t, body, "Alpha FM")
+	require.NotContains(t, body, "Beta Radio")
+
+	// Unfavoriting removes it from the Favorites tab.
+	req = authedRequest(t, http.MethodPost, "/stations/station-1/favorite?view=favorites", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.NotContains(t, body, "Alpha FM")
+	require.Contains(t, body, "No favorite stations yet.")
+
+	favs, err = fetchFavoriteUUIDs()
+	require.NoError(t, err)
+	require.Empty(t, favs)
+
+	// Favoriting an unknown station is a 404.
+	req = authedRequest(t, http.MethodPost, "/stations/nope/favorite?view=stations", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}

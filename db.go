@@ -209,6 +209,11 @@ func createSchema(db *sql.DB) error {
 			languagecodes  STRING NOT NULL DEFAULT '',
 			created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+
+		CREATE TABLE IF NOT EXISTS favorites (
+			stationuuid  STRING PRIMARY KEY REFERENCES radio_stations(stationuuid) ON DELETE CASCADE,
+			favorited_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	return err
 }
@@ -793,8 +798,9 @@ func fetchRadioStations() ([]RadioStation, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
-		 FROM radio_stations
-		 LIMIT 100
+			FROM radio_stations
+			order by random()
+			LIMIT 100
 		 `,
 	)
 	if err != nil {
@@ -830,4 +836,100 @@ func fetchRadioStationURLs() (map[string]string, error) {
 		urls[s.Name] = s.URLResolved
 	}
 	return urls, nil
+}
+
+// fetchRadioStationByUUID returns the station with the given uuid, or
+// sql.ErrNoRows when it does not exist.
+func fetchRadioStationByUUID(uuid string) (RadioStation, error) {
+	if recordDB == nil {
+		return RadioStation{}, fmt.Errorf("nil db")
+	}
+
+	var s RadioStation
+	err := recordDB.QueryRow(
+		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
+		 FROM radio_stations
+		 WHERE stationuuid = $1`,
+		uuid,
+	).Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes)
+	if err != nil {
+		return RadioStation{}, err
+	}
+	return s, nil
+}
+
+// addFavorite marks a station as a favorite. It is idempotent: re-favoriting
+// an already-favorited station keeps the original favorited_at time.
+func addFavorite(stationuuid string) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+	_, err := recordDB.Exec(
+		`INSERT INTO favorites (stationuuid) VALUES ($1)
+		 ON CONFLICT (stationuuid) DO NOTHING`,
+		stationuuid,
+	)
+	return err
+}
+
+// removeFavorite unmarks a station as a favorite. It is a no-op when the
+// station was not favorited.
+func removeFavorite(stationuuid string) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+	_, err := recordDB.Exec(`DELETE FROM favorites WHERE stationuuid = $1`, stationuuid)
+	return err
+}
+
+// fetchFavoriteUUIDs returns the set of station uuids that are favorited.
+func fetchFavoriteUUIDs() (map[string]bool, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(`SELECT stationuuid FROM favorites`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	favs := map[string]bool{}
+	for rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
+			return nil, err
+		}
+		favs[uuid] = true
+	}
+	return favs, rows.Err()
+}
+
+// fetchFavoriteStations returns the favorited stations, ordered by when they
+// were favorited, newest first.
+func fetchFavoriteStations() ([]RadioStation, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT s.stationuuid, s.name, s.url_resolved, s.favicon, s.tags, s.countrycode, s.languagecodes
+		 FROM favorites f
+		 JOIN radio_stations s ON s.stationuuid = f.stationuuid
+		 ORDER BY f.favorited_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stations []RadioStation
+	for rows.Next() {
+		var s RadioStation
+		if err := rows.Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes); err != nil {
+			return nil, err
+		}
+		stations = append(stations, s)
+	}
+	return stations, rows.Err()
 }

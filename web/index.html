@@ -618,6 +618,68 @@
 		.radio-meta { color: var(--muted); font-size: 0.8rem; }
 		.go-playlists { margin-top: 0.5rem; }
 
+		/* ---------- Radio Stations tab ---------- */
+		.station-table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 0.85rem;
+		}
+		.station-table td:last-child { font-family: inherit; }
+		.station-table td:first-child {
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
+			border-top: none;
+		}
+		.station-table tr { border-top: 1px solid var(--border); }
+		.station-table th, .station-table td { padding: 0.55rem 0.6rem; }
+		.station-table tbody tr:hover { background: rgba(99, 102, 241, 0.08); }
+		.station-favicon {
+			width: 1.75rem;
+			height: 1.75rem;
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 8px;
+			background: var(--panel-2);
+			font-size: 0.9rem;
+			overflow: hidden;
+		}
+		.station-favicon img {
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+		}
+		.station-name { font-weight: 600; }
+		.station-star { margin-left: 0.35rem; font-size: 1rem; }
+		.station-fav {
+			background: transparent;
+			color: #fbbf24;
+			border: none;
+			font-size: 1rem;
+			line-height: 1;
+			padding: 0.3rem 0.5rem;
+			cursor: pointer;
+			border-radius: 8px;
+		}
+		.station-fav:hover { background: rgba(251, 191, 36, 0.15); filter: none; }
+		.station-tags { color: var(--muted); max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.station-actions { text-align: right; white-space: nowrap; }
+		.station-record {
+			background: var(--accent-2);
+			color: #fff;
+			border: none;
+			border-radius: 8px;
+			padding: 0.4rem 0.9rem;
+			font-size: 0.85rem;
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.station-record:hover:not(:disabled) { filter: brightness(1.15); }
+		.station-record:disabled { background: var(--panel-2); color: var(--muted); cursor: default; opacity: 1; }
+		.station-status { color: var(--accent-2); font-size: 0.8rem; margin-left: 0.5rem; }
+
 		/* ---------- Mini player ---------- */
 		.mini-player {
 			position: fixed;
@@ -707,6 +769,12 @@
 			<button class="tab" data-tab="playlists" data-title="Play Lists" data-subtitle="Built from your splits" data-controls="false"
 				hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/playlists"
 				hx-on:click="selectTab('playlists')">Play Lists</button>
+			<button class="tab" data-tab="stations" data-title="Radio Stations" data-subtitle="Record and play live stations" data-controls="false"
+				hx-get="/stations/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/stations"
+				hx-on:click="selectTab('stations')">Radio Stations</button>
+			<button class="tab" data-tab="favorites" data-title="Favorite Radio Stations" data-subtitle="Your favorited stations" data-controls="false"
+				hx-get="/favorites/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/favorites"
+				hx-on:click="selectTab('favorites')">Favorites</button>
 		</nav>
 	</aside>
 	<main class="main">
@@ -768,6 +836,12 @@
 			} else if (path.startsWith('/playlists')) {
 				tab = 'playlists';
 				frag = '/playlists/view' + window.location.search;
+			} else if (path.startsWith('/stations')) {
+				tab = 'stations';
+				frag = '/stations/view';
+			} else if (path.startsWith('/favorites')) {
+				tab = 'favorites';
+				frag = '/favorites/view';
 			} else {
 				tab = 'splits';
 				frag = '/splits/view';

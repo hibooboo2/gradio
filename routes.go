@@ -84,6 +84,8 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /splits", serveIndex)
 	mux.HandleFunc("GET /player", serveIndex)
 	mux.HandleFunc("GET /playlists", serveIndex)
+	mux.HandleFunc("GET /stations", serveIndex)
+	mux.HandleFunc("GET /favorites", serveIndex)
 
 	// JSON API backed directly by the cockroach tables.
 	mux.HandleFunc("GET /api/splits", handleListSplits)
@@ -108,6 +110,10 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /splits/view", handleSplitsView)
 	mux.HandleFunc("GET /playlists/view", handlePlaylistsView)
 	mux.HandleFunc("GET /player/view", handlePlayerView)
+	mux.HandleFunc("GET /stations/view", handleStationsView)
+	mux.HandleFunc("GET /favorites/view", handleFavoritesView)
+	mux.HandleFunc("POST /stations/{uuid}/record", handleStationRecord)
+	mux.HandleFunc("POST /stations/{uuid}/favorite", handleToggleFavorite)
 
 	mux.HandleFunc("POST /playlists/create", handleCreatePlaylist)
 	mux.HandleFunc("POST /playlists/{id}/delete", handleDeletePlaylist)

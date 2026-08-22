@@ -45,6 +45,93 @@ var speakerOnce sync.Once
 // is shown (and updated) together.
 var sharedProgress *mpb.Progress
 
+var recorderManager *recorderSet
+
+type recorderSet struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	g         *errgroup.Group
+	recorders map[string]*Recorder
+	cancel    map[string]context.CancelFunc
+}
+
+// NewRecorderSet creates a recorder set bound to ctx. Every recorder started
+// through it runs in the set's errgroup under a context derived from ctx, so
+// cancelling ctx (e.g. program shutdown) stops all of them.
+func NewRecorderSet(ctx context.Context) *recorderSet {
+	g, gctx := errgroup.WithContext(ctx)
+	return &recorderSet{
+		ctx:       gctx,
+		g:         g,
+		recorders: map[string]*Recorder{},
+		cancel:    map[string]context.CancelFunc{},
+	}
+}
+
+// start begins recording the named station if it is not already being
+// recorded. url may be empty when the station was already registered by the
+// -record flag loop.
+func (rs *recorderSet) start(name, url string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if _, ok := rs.recorders[name]; ok {
+		return false
+	}
+	recCtx, cancel := context.WithCancel(rs.ctx)
+	rec := &Recorder{url: url, radioName: name}
+	rs.recorders[name] = rec
+	rs.cancel[name] = cancel
+	rs.g.Go(func() error {
+		rec.Run(recCtx)
+		rs.mu.Lock()
+		delete(rs.recorders, name)
+		delete(rs.cancel, name)
+		rs.mu.Unlock()
+		return nil
+	})
+	return true
+}
+
+// wait blocks until every recorder started through the set has finished.
+func (rs *recorderSet) wait() error {
+	return rs.g.Wait()
+}
+
+// stop cancels the recorder for the named station, causing its Run loop to
+// return. It is a no-op when the station is not being recorded.
+func (rs *recorderSet) stop(name string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if c, ok := rs.cancel[name]; ok {
+		c()
+	}
+}
+
+// register adds an externally-owned recorder (e.g. one created by the -record
+// flag loop) so start() treats the station as already recording.
+func (rs *recorderSet) register(name string, rec *Recorder) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.recorders[name] = rec
+}
+
+// unregister removes a recorder that has finished, so the station can be
+// recorded again later.
+func (rs *recorderSet) unregister(name string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	delete(rs.recorders, name)
+	delete(rs.cancel, name)
+}
+
+// isRecording reports whether the named station is currently being recorded.
+func (rs *recorderSet) isRecording(name string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	_, ok := rs.recorders[name]
+	return ok
+}
+
 func main() {
 	glog.Init()
 
@@ -62,6 +149,10 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	defer cancel()
+
+	// Rebind the on-demand recorder manager to the process context so recorders
+	// started from the web UI stop when the program is cancelled.
+	recorderManager = NewRecorderSet(ctx)
 
 	if *syncRadio {
 		n, err := syncRadioStations(ctx)
@@ -86,7 +177,6 @@ func main() {
 			slog.InfoContext(ctx, "synced radio stations", "count", n)
 		}
 	}
-	urls = radioURLs()
 
 	if *file != "" {
 		if err := SplitStream(ctx, *file); err != nil {
@@ -145,9 +235,11 @@ func main() {
 				url:       url,
 				radioName: name,
 			}
+			recorderManager.register(name, rec)
 
 			wg.Go(func() error {
 				rec.Run(ctx)
+				recorderManager.unregister(name)
 				return nil
 			})
 		}
@@ -164,6 +256,12 @@ func main() {
 	err = wg.Wait()
 	if err != nil {
 		slog.ErrorContext(ctx, "Group done", "err", err)
+	}
+
+	// Wait for on-demand recorders (started from the web UI) to wind down now
+	// that their context has been cancelled.
+	if werr := recorderManager.wait(); werr != nil {
+		slog.ErrorContext(ctx, "Recorder group done", "err", werr)
 	}
 
 	log.Println("shutdown complete")
@@ -250,7 +348,8 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 			slog.Error("PAnicked and recoverd", "perr", perr)
 		}
 
-		r.storeToDisk()
+		stored := r.storeToDisk()
+		slog.InfoContext(ctx, "Radio recording failed", "radioStation", r.radioName, "stored", stored)
 	}()
 
 	buf := make([]byte, 64*1024)
@@ -340,16 +439,16 @@ func (r *Recorder) write(p []byte) (int, error) {
 	return r.buffer.Write(p)
 }
 
-func (r *Recorder) storeToDisk() {
+func (r *Recorder) storeToDisk() bool {
 	if r.buffer != nil {
 		if r.buffer.Len() < 1024*1024*1024*5 {
 			slog.Info("Not storing recording from buffer", "size", r.buffer.Len())
-			return
+			return false
 		}
 		err := os.WriteFile(r.fullName, r.buffer.Bytes(), 0644)
 		if err != nil {
 			slog.Error("Failed to write file", "file", r.fullName)
-			return
+			return false
 		}
 
 		info, err := os.Stat(r.fullName)
@@ -358,8 +457,10 @@ func (r *Recorder) storeToDisk() {
 		} else {
 			slog.Info("Recording to db", "name", r.fullName, "size", info.Size())
 			r.recordFileToDB(r.fullName, r.started, info.Size())
+			return true
 		}
 	}
+	return false
 }
 
 func (r *Recorder) rotate() error {
