@@ -23,6 +23,7 @@ func TestPageURLsServeShell(t *testing.T) {
 	mux := routes()
 	for _, path := range []string{
 		"/splits", "/player", "/playlists",
+		"/history", "/history?sort=frequency&group=radio",
 		"/player?playlist=123&song=456",
 		"/playlists?expand=99",
 	} {
@@ -46,7 +47,7 @@ func TestRoutes(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 
@@ -167,7 +168,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 

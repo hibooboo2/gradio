@@ -249,6 +249,14 @@ func createSchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_song_plays_plays ON song_plays(plays);
 
+		CREATE TABLE IF NOT EXISTS play_history (
+			id        INT PRIMARY KEY DEFAULT unique_rowid(),
+			split_id  INT NOT NULL REFERENCES splits(id) ON DELETE CASCADE,
+			played_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS idx_play_history_split ON play_history(split_id);
+		CREATE INDEX IF NOT EXISTS idx_play_history_played_at ON play_history(played_at);
+
 		CREATE TABLE IF NOT EXISTS users (
 			id         INT PRIMARY KEY DEFAULT unique_rowid(),
 			name       STRING NOT NULL UNIQUE,
@@ -725,7 +733,8 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 }
 
 // recordPlay increments the play counter for a split, inserting a row the
-// first time it is heard.
+// first time it is heard. Every play also appends a row to the play_history
+// table so the history view can show what was played and when.
 func recordPlay(splitID int64) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
@@ -734,6 +743,25 @@ func recordPlay(splitID int64) error {
 	_, err := recordDB.Exec(
 		`INSERT INTO song_plays (split_id, plays) VALUES ($1, 1)
 		 ON CONFLICT (split_id) DO UPDATE SET plays = song_plays.plays + 1, updated_at = now()`,
+		splitID,
+	)
+	if err != nil {
+		return err
+	}
+
+	return insertPlayHistory(splitID)
+}
+
+// insertPlayHistory appends one row to the play_history table recording that a
+// split was played at the current time. Every play event gets its own row so
+// the history can later be aggregated by frequency or recency.
+func insertPlayHistory(splitID int64) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	_, err := recordDB.Exec(
+		`INSERT INTO play_history (split_id) VALUES ($1)`,
 		splitID,
 	)
 	return err
@@ -777,6 +805,138 @@ func fetchSongStats(splitID int64) (plays int, rating int, err error) {
 		return 0, 0, err
 	}
 	return plays, rating, nil
+}
+
+// HistoryEntry is one song in the play history, joined with its full split row
+// and the radio it was recorded from, plus the aggregated play count and the
+// first and last time it was played.
+type HistoryEntry struct {
+	Split       Split     `json:"split"`
+	Radio       string    `json:"radio"`
+	Plays       int       `json:"plays"`
+	LastPlayed  time.Time `json:"last_played"`
+	FirstPlayed time.Time `json:"first_played"`
+}
+
+// RadioHistoryGroup is a set of history entries that share the same radio,
+// plus a display color for that radio.
+type RadioHistoryGroup struct {
+	Radio string         `json:"radio"`
+	Color string         `json:"color"`
+	Plays []HistoryEntry `json:"plays"`
+}
+
+// historySelect is the shared SELECT prefix for the play history queries. It
+// joins play_history to splits and recordings so each entry carries the full
+// split row, the radio name, the aggregated play count, and the first/last
+// played timestamps. The GROUP BY lists every non-aggregate column so the query
+// is valid on any PostgreSQL-compatible engine.
+const historySelect = `
+	SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
+	       r.radio,
+	       COUNT(*) AS plays,
+	       MAX(ph.played_at) AS last_played,
+	       MIN(ph.played_at) AS first_played
+	FROM play_history ph
+	JOIN splits s ON s.id = ph.split_id
+	JOIN recordings r ON r.id = s.recording_id
+	GROUP BY s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title, r.radio`
+
+// scanHistoryRows scans the shared historySelect result columns into
+// HistoryEntry values.
+func scanHistoryRows(rows *sql.Rows) ([]HistoryEntry, error) {
+	var entries []HistoryEntry
+	for rows.Next() {
+		var e HistoryEntry
+		if err := rows.Scan(
+			&e.Split.ID, &e.Split.RecordingID, &e.Split.SourcePath, &e.Split.Index,
+			&e.Split.Start, &e.Split.End, &e.Split.OutputPath, &e.Split.Classification, &e.Split.CustomTitle,
+			&e.Radio,
+			&e.Plays,
+			&e.LastPlayed,
+			&e.FirstPlayed,
+		); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+// fetchPlayHistoryRecency returns the distinct songs in the play history,
+// ordered by when they were last played (most recent first), limited to limit
+// entries.
+func fetchPlayHistoryRecency(limit int) ([]HistoryEntry, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(historySelect+`
+		ORDER BY last_played DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHistoryRows(rows)
+}
+
+// fetchPlayHistoryFrequency returns the distinct songs in the play history,
+// ordered by how often they were played (most played first), with the most
+// recently played song winning ties. Limited to limit entries.
+func fetchPlayHistoryFrequency(limit int) ([]HistoryEntry, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(historySelect+`
+		ORDER BY plays DESC, last_played DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHistoryRows(rows)
+}
+
+// fetchPlayHistoryGrouped returns the play history grouped by radio, ordered by
+// radio name then play count. Limited to limit entries total.
+func fetchPlayHistoryGrouped(limit int) ([]RadioHistoryGroup, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(historySelect+`
+		ORDER BY r.radio ASC, plays DESC, last_played DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries, err := scanHistoryRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	order := []string{}
+	byRadio := map[string][]HistoryEntry{}
+	for _, e := range entries {
+		if _, ok := byRadio[e.Radio]; !ok {
+			order = append(order, e.Radio)
+		}
+		byRadio[e.Radio] = append(byRadio[e.Radio], e)
+	}
+
+	groups := make([]RadioHistoryGroup, 0, len(order))
+	for i, radio := range order {
+		groups = append(groups, RadioHistoryGroup{
+			Radio: radio,
+			Color: radioPalette[i%len(radioPalette)],
+			Plays: byRadio[radio],
+		})
+	}
+	return groups, nil
 }
 
 // User is one row in the users table. Password holds the bcrypt hash of the

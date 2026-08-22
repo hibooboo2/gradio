@@ -46,6 +46,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /splits                splits view
 //	GET    /player                player view
 //	GET    /playlists             play lists view
+//	GET    /history               play history view
 //
 // JSON API backed directly by the cockroach tables:
 //
@@ -56,6 +57,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //
 // GET    /api/radios            list radios with playable splits
 // GET    /api/shuffle           next global-shuffle batch (?exclude=ids)
+// GET    /api/history           play history (?sort=recency|frequency, ?group=radio, ?limit=N)
 //
 // Splits/recordings detail API:
 //
@@ -72,6 +74,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /splits/view            splits tab fragment
 //	GET    /playlists/view         play lists tab fragment
 //	GET    /player/view            player tab fragment (?shuffle=1, ?playlist=.. or ?radio=..)
+//	GET    /history/view           play history tab fragment (?sort=.., ?group=radio, ?limit=N)
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
@@ -86,6 +89,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /playlists", serveIndex)
 	mux.HandleFunc("GET /stations", serveIndex)
 	mux.HandleFunc("GET /favorites", serveIndex)
+	mux.HandleFunc("GET /history", serveIndex)
 
 	// JSON API backed directly by the cockroach tables.
 	mux.HandleFunc("GET /api/splits", handleListSplits)
@@ -93,6 +97,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /api/playlists/{id}", handleGetPlaylistJSON)
 	mux.HandleFunc("GET /api/songs", handleListSongsJSON)
 	mux.HandleFunc("GET /api/radios", handleListRadiosJSON)
+	mux.HandleFunc("GET /api/history", handleHistoryJSON)
 
 	// Splits/recordings detail API.
 	mux.HandleFunc("GET /splits/{id}", handleGetSplit)
@@ -116,6 +121,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /player/view", handlePlayerView)
 	mux.HandleFunc("GET /stations/view", handleStationsView)
 	mux.HandleFunc("GET /favorites/view", handleFavoritesView)
+	mux.HandleFunc("GET /history/view", handleHistoryView)
 	mux.HandleFunc("POST /stations/{uuid}/record", handleStationRecord)
 	mux.HandleFunc("POST /stations/{uuid}/favorite", handleToggleFavorite)
 

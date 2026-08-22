@@ -863,6 +863,31 @@
 			from { opacity: 1; transform: translateY(0); }
 			to { opacity: 0; transform: translateY(-0.5rem); }
 		}
+
+		/* ---------- Play History tab ---------- */
+		.history-form {
+			display: flex;
+			align-items: center;
+			gap: 1rem;
+			margin-bottom: 1.25rem;
+		}
+		.history-group-toggle {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.4rem;
+			color: var(--muted);
+			font-size: 0.9rem;
+			cursor: pointer;
+			user-select: none;
+		}
+		.history-group-toggle input {
+			accent-color: var(--accent);
+			width: 1rem;
+			height: 1rem;
+			cursor: pointer;
+		}
+		.history-table td:first-child { font-weight: 600; }
+		.history-table td:nth-child(2) { color: var(--muted); }
 	</style>
 </head>
 <body>
@@ -883,6 +908,9 @@
 			<button class="tab" data-tab="favorites" data-title="Favorite Radio Stations" data-subtitle="Your favorited stations" data-controls="false"
 				hx-get="/favorites/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/favorites"
 				hx-on:click="selectTab('favorites')">Favorites</button>
+			<button class="tab" data-tab="history" data-title="Play History" data-subtitle="What you've played, when" data-controls="false"
+				hx-get="/history/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/history"
+				hx-on:click="selectTab('history')">History</button>
 		</nav>
 	</aside>
 	<main class="main">
@@ -953,6 +981,9 @@
 			} else if (path.startsWith('/favorites')) {
 				tab = 'favorites';
 				frag = '/favorites/view';
+			} else if (path.startsWith('/history')) {
+				tab = 'history';
+				frag = '/history/view' + window.location.search;
 			} else {
 				tab = 'splits';
 				frag = '/splits/view';
@@ -963,6 +994,18 @@
 
 		document.addEventListener('DOMContentLoaded', loadViewFromURL);
 		window.addEventListener('popstate', loadViewFromURL);
+
+		// Submit the play history sort/group form: fetch the fragment with the
+		// chosen params and push the matching page URL (/history?sort=..&group=..)
+		// so the state survives reloads and back/forward.
+		function historyFormSubmit(e) {
+			e.preventDefault();
+			const params = new URLSearchParams(new FormData(e.target));
+			const qs = params.toString();
+			const url = '/history' + (qs ? '?' + qs : '');
+			htmx.ajax('GET', '/history/view' + (qs ? '?' + qs : ''), '#content');
+			history.pushState({ __gradio: url }, '', url);
+		}
 
 		// Open the player tab. When a queue is already loaded, render the full
 		// player from Player's in-memory state so the current song, position,

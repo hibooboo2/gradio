@@ -271,6 +271,12 @@ var viewFuncs = template.FuncMap{
 		s := total % 60
 		return fmt.Sprintf("%d:%02d", m, s)
 	},
+	"timeFmt": func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.Local().Format("2006-01-02 15:04:05")
+	},
 }
 
 var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFuncs).Parse(`
