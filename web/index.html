@@ -1084,6 +1084,7 @@
 					src: t.src,
 					title: t.title,
 					derivedTitle: t.derived_title || t.title,
+					customTitle: t.custom_title || '',
 					split: String(t.id),
 					start: t.start,
 					end: t.end,
@@ -1328,6 +1329,7 @@
 				li.setAttribute('data-split', t.split);
 				li.setAttribute('data-classification', t.classification || '');
 				li.setAttribute('data-derived-title', t.derivedTitle || t.title);
+				li.setAttribute('data-custom-title', t.customTitle || '');
 				const num = document.createElement('span');
 				num.className = 'queue-num';
 				num.textContent = String(i + 1);
@@ -1459,6 +1461,7 @@
 				src: li.getAttribute('data-src'),
 				title: li.getAttribute('data-title'),
 				derivedTitle: li.getAttribute('data-derived-title') || li.getAttribute('data-title'),
+				customTitle: li.getAttribute('data-custom-title') || '',
 				split: li.getAttribute('data-split'),
 				start: parseFloat(li.getAttribute('data-start')),
 				end: parseFloat(li.getAttribute('data-end')),
@@ -1668,20 +1671,29 @@
 					body: JSON.stringify({ custom_title: val }),
 				});
 				if (!res.ok) { wrap.replaceWith(titleEl); return; }
-				const derived = row.getAttribute('data-derived-title') || titleEl.textContent;
+				// The derived title lives on the row (player queue) or on the
+				// title span (splits table); fall back to the current text so
+				// clearing a custom title reverts to the derived label instead
+				// of keeping the old custom one.
+				const derived = row.getAttribute('data-derived-title') ||
+					titleEl.getAttribute('data-derived-title') ||
+					titleEl.textContent;
 				const newTitle = val ? val : derived;
 				titleEl.textContent = newTitle;
 				wrap.replaceWith(titleEl);
 				if (row.hasAttribute('data-player-track')) {
 					row.setAttribute('data-title', newTitle);
 					row.setAttribute('data-custom-title', val);
-					const items = row.parentElement ? [...row.parentElement.querySelectorAll('[data-player-track]')] : [];
-					const idx = items.indexOf(row);
-					if (idx >= 0 && Player.queue[idx]) {
-						Player.queue[idx].title = newTitle;
-					}
-					renderAll();
 				}
+				// Keep Player's in-memory queue in sync so the mini player, the
+				// full player header and any re-rendered queue list show the new
+				// title — even when the rename happened from the splits view.
+				const qIdx = Player.queue.findIndex(t => String(t.split) === String(splitId));
+				if (qIdx >= 0) {
+					Player.queue[qIdx].title = newTitle;
+					if (!val) Player.queue[qIdx].derivedTitle = derived;
+				}
+				renderAll();
 			} catch (err) { wrap.replaceWith(titleEl); }
 		}
 

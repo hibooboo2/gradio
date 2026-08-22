@@ -107,8 +107,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	}
 
 	// --- Run all RecordOnce calls concurrently ---
-	// rotateTime (30s) controls file rotation; the context timeout (45s) bounds
-	// the run so the test cannot hang.
+	// The context timeout (45s) bounds the run so the test cannot hang.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
@@ -117,7 +116,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	for i, rec := range recorders {
 		i, rec := i, rec
 		g.Go(func() error {
-			results[i] = rec.RecordOnce(ctx, 30*time.Second)
+			results[i] = rec.RecordOnce(ctx)
 			return nil // never fail the group; failures are inspected per recorder
 		})
 	}

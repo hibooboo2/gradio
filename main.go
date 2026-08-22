@@ -67,12 +67,15 @@ func (rs *recorderSet) start(name, url string) bool {
 		return false
 	}
 	ctx, cancel := context.WithCancel(rs.ctx)
+	slog.InfoContext(ctx, "Recorder set starting", "radio", name, "url", url)
 	rec := &Recorder{url: url, radioName: name, cancel: cancel}
 	rs.recorders[name] = rec
 	rs.g.Go(func() error {
 		defer rs.deleteRecorder(name)
 		slog.InfoContext(ctx, "Starting recorder", "radio", name, "url", url)
-		err := rec.RecordOnce(ctx, time.Hour)
+		recCtx, cancel := context.WithTimeout(ctx, time.Hour)
+		defer cancel()
+		err := rec.RecordOnce(recCtx)
 		if err != nil {
 			slog.ErrorContext(ctx, "REcord once returned", "err", err)
 			return nil
@@ -237,7 +240,10 @@ func main() {
 				recorderManager.register(name, rec)
 
 				wg.Go(func() error {
-					rec.Run(ctx)
+					recContext, cancel := context.WithTimeout(ctx, time.Hour)
+					rec.cancel = cancel
+					defer cancel()
+					rec.RecordOnce(recContext)
 					recorderManager.unregister(name)
 					return nil
 				})
@@ -296,6 +302,8 @@ func (r *Recorder) recordFileToDB(fullName string, started time.Time, size int64
 func (r *Recorder) Run(ctx context.Context) {
 	defer r.Close()
 
+	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
@@ -303,10 +311,9 @@ func (r *Recorder) Run(ctx context.Context) {
 		default:
 		}
 
-		if err := r.RecordOnce(ctx, time.Minute*60); err != nil {
+		if err := r.RecordOnce(ctx); err != nil {
 			if ctx.Err() != nil {
 				slog.ErrorContext(ctx, "Conext had an error", "err", ctx.Err())
-
 			}
 
 			slog.InfoContext(ctx, "recording failed", "err", err)
@@ -323,7 +330,7 @@ func (r *Recorder) Run(ctx context.Context) {
 	}
 }
 
-func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) error {
+func (r *Recorder) RecordOnce(ctx context.Context) error {
 	slog.InfoContext(ctx, "Record once called", "radioName", r.radioName, "streamURL", r.url)
 
 	req, err := http.NewRequestWithContext(
@@ -355,7 +362,7 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 			slog.Error("PAnicked and recoverd", "perr", perr)
 		}
 
-		stored := r.storeToDisk()
+		stored := r.Close()
 		slog.InfoContext(ctx, "Radio recording go routine finished", "radioStation", r.radioName, "stored", stored)
 	}()
 
@@ -363,27 +370,16 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 
 	currentLoop := time.Now()
 	for {
-		if time.Since(currentLoop) > rotateTime {
-			err = r.rotate(ctx)
-			if err != nil {
-				slog.ErrorContext(ctx, "rotate failed", "err", err)
-				return fmt.Errorf("failed to rotate file during recording")
-			}
-			slog.InfoContext(ctx, "Record once finished", "timeTook", time.Since(currentLoop))
-			return nil
-		}
-
 		n, err := resp.Body.Read(buf)
-
 		if n > 0 {
 			if _, werr := r.write(buf[:n]); werr != nil {
-				slog.ErrorContext(ctx, "Write failed", "werr", werr)
+				slog.ErrorContext(ctx, "Write failed", "werr", werr, "radioName", r.radioName)
 				return werr
 			}
 		}
 
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to read body", "err", err)
+			slog.ErrorContext(ctx, "Failed to read body", "err", err, "radioName", r.radioName)
 			if err == io.EOF {
 				return err
 			}
@@ -395,7 +391,9 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 			slog.ErrorContext(ctx, "Context is done", "radio", r.radioName)
 			return nil
 		default:
-			slog.DebugContext(ctx, "Default case in record once loop")
+			if time.Since(currentLoop)/time.Millisecond%20000 == 0 {
+				slog.DebugContext(ctx, "Default case in record once loop", "radio", r.radioName)
+			}
 		}
 	}
 }
@@ -414,7 +412,7 @@ func (r *Recorder) write(p []byte) (int, error) {
 func (r *Recorder) storeToDisk() bool {
 	if r.buffer != nil {
 		if r.buffer.Len() < 1024*1024*1024*5 {
-			slog.Info("Not storing recording from buffer", "size", r.buffer.Len(), "data", r.buffer.String())
+			slog.Info("Not storing recording from buffer", "size", r.buffer.Len())
 			return false
 		}
 		err := os.WriteFile(r.filename, r.buffer.Bytes(), 0644)
@@ -465,14 +463,19 @@ func (r *Recorder) rotate(ctx context.Context) error {
 	return nil
 }
 
-func (r *Recorder) Close() {
+func (r *Recorder) Close() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.storeToDisk()
+	stored := r.storeToDisk()
 
 	r.buffer = nil
 	r.filename = ""
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	return stored
 }
 
 // watchAndSplit periodically polls the recordings table for files that were

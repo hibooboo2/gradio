@@ -510,6 +510,7 @@ type shuffleTrack struct {
 	ID             int64   `json:"id"`
 	Title          string  `json:"title"`
 	DerivedTitle   string  `json:"derived_title"`
+	CustomTitle    string  `json:"custom_title"`
 	Src            string  `json:"src"`
 	Start          float64 `json:"start"`
 	End            float64 `json:"end"`
@@ -828,6 +829,7 @@ func handleShuffleJSON(w http.ResponseWriter, r *http.Request) {
 			ID:             s.ID,
 			Title:          songTitle(s),
 			DerivedTitle:   derivedSongTitle(s),
+			CustomTitle:    s.CustomTitle,
 			Src:            musicURL(s.OutputPath),
 			Start:          s.Start,
 			End:            s.End,
