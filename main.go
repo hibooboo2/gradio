@@ -22,8 +22,6 @@ import (
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
 	glog "github.com/hibooboo2/gradio/log"
-	"github.com/vbauerster/mpb"
-	"github.com/vbauerster/mpb/decor"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -37,11 +35,6 @@ var insecureClient = &http.Client{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	},
 }
-
-// sharedProgress renders one combined progress bar display shared by all radio
-// recorders. It is created once when recording is enabled so every radio's bar
-// is shown (and updated) together.
-var sharedProgress *mpb.Progress
 
 var recorderManager *recorderSet
 
@@ -234,10 +227,6 @@ func main() {
 	}
 
 	if *record {
-		// One shared progress bar display for all radios so they render and
-		// update together. A goroutine keeps it waiting until every radio is
-		// done so it renders even after the main recorder goroutines return.
-		sharedProgress = mpb.New(mpb.WithWidth(60))
 		stations, err := fetchRadioStationURLs()
 		if err == nil {
 			for name, url := range stations {
@@ -371,35 +360,17 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 	}()
 
 	buf := make([]byte, 64*1024)
-	total := int64(rotateTime.Seconds())
-	bar := r.newBar(total)
-	if bar != nil {
-		defer sharedProgress.Abort(bar, true)
-	}
-	currentLoop := time.Now()
-	added := 0.000
-	for {
-		since := int(time.Since(currentLoop).Seconds() - added)
-		if since > 0 {
-			bar.IncrBy(since, time.Since(currentLoop))
-			added += float64(since)
-		}
 
+	currentLoop := time.Now()
+	for {
 		if time.Since(currentLoop) > rotateTime {
-			if bar != nil {
-				bar.SetTotal(total, true)
-				bar = r.newBar(total)
-				if bar != nil {
-					defer sharedProgress.Abort(bar, true)
-				}
-				currentLoop = time.Now()
-			}
 			err = r.rotate(ctx)
 			if err != nil {
 				slog.ErrorContext(ctx, "rotate failed", "err", err)
 				return fmt.Errorf("failed to rotate file during recording")
 			}
-			currentLoop = time.Now()
+			slog.InfoContext(ctx, "Record once finished", "timeTook", time.Since(currentLoop))
+			return nil
 		}
 
 		n, err := resp.Body.Read(buf)
@@ -424,30 +395,9 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 			slog.ErrorContext(ctx, "Context is done", "radio", r.radioName)
 			return nil
 		default:
+			slog.DebugContext(ctx, "Default case in record once loop")
 		}
 	}
-}
-
-// newBar adds this recorder's progress bar to the shared progress container.
-// It returns nil when recording is not enabled (no shared container), in which
-// case the recorder still runs without a progress bar.
-func (r *Recorder) newBar(total int64) *mpb.Bar {
-	if sharedProgress == nil {
-		return nil
-	}
-	return sharedProgress.AddBar(
-		total,
-		mpb.BarStyle("[=>-]"),
-		mpb.BarRemoveOnComplete(),
-		mpb.PrependDecorators(
-			decor.Name("Recording "+r.radioName+": ", decor.WC{W: 24, C: decor.DidentRight}),
-			decor.CountersNoUnit("%d/%d s"),
-		),
-		mpb.AppendDecorators(
-			decor.Percentage(),
-			decor.Elapsed(decor.ET_STYLE_MMSS),
-		),
-	)
 }
 
 func (r *Recorder) write(p []byte) (int, error) {
@@ -464,7 +414,7 @@ func (r *Recorder) write(p []byte) (int, error) {
 func (r *Recorder) storeToDisk() bool {
 	if r.buffer != nil {
 		if r.buffer.Len() < 1024*1024*1024*5 {
-			slog.Info("Not storing recording from buffer", "size", r.buffer.Len())
+			slog.Info("Not storing recording from buffer", "size", r.buffer.Len(), "data", r.buffer.String())
 			return false
 		}
 		err := os.WriteFile(r.filename, r.buffer.Bytes(), 0644)
