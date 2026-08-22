@@ -174,6 +174,10 @@
 		.cls-not_song td:first-child {
 			border-left: 4px solid var(--not-song);
 		}
+		.cls-commercial td:first-child { border-left: 4px solid var(--danger); }
+		.cls-re_split td:first-child { border-left: 4px solid #94a3b8; }
+		.cls-informational td:first-child { border-left: 4px solid #06b6d4; }
+		.cls-news td:first-child { border-left: 4px solid #8b5cf6; }
 		.cls- td:first-child { border-left: 4px solid var(--border); }
 
 		td:last-child {
@@ -460,8 +464,22 @@
 		.mark-row {
 			display: flex;
 			justify-content: center;
+			align-items: center;
 			gap: 0.5rem;
 			margin-top: 1.25rem;
+		}
+		.mark-row select {
+			background: var(--bg);
+			color: var(--text);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 0.45rem 0.6rem;
+			font-size: 0.85rem;
+			max-width: 15rem;
+		}
+		.mark-row select.success {
+			border-color: var(--accent-2);
+			box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
 		}
 		.mark-row button.success {
 			background: var(--accent-2);
@@ -570,6 +588,34 @@
 		.queue-info { flex: 1; min-width: 0; }
 		.queue-title { display: block; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 		.queue-sub { color: var(--muted); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+		.title-edit {
+			background: transparent;
+			color: var(--muted);
+			border: none;
+			border-radius: 6px;
+			padding: 0.15rem 0.35rem;
+			font-size: 0.85rem;
+			line-height: 1;
+			cursor: pointer;
+			flex-shrink: 0;
+		}
+		.title-edit:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); filter: none; }
+		.title-edit-wrap { display: inline-flex; align-items: center; gap: 0.35rem; }
+		.title-edit-wrap input[type="text"] { padding: 0.25rem 0.5rem; font-size: 0.85rem; min-width: 12rem; }
+		.title-edit-wrap button {
+			background: var(--accent);
+			color: #fff;
+			border: none;
+			border-radius: 6px;
+			padding: 0.25rem 0.6rem;
+			font-size: 0.8rem;
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.title-edit-wrap button:hover { filter: brightness(1.15); }
+		.title-edit-wrap .title-edit-cancel { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+		.title-edit-wrap .title-edit-cancel:hover { color: var(--text); filter: none; }
 
 		.player-empty { padding: 2.5rem; text-align: center; }
 		.player-empty button { margin-top: 0.75rem; }
@@ -764,8 +810,7 @@
 				hx-get="/splits/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/splits"
 				hx-on:click="selectTab('splits')">Splits</button>
 			<button class="tab" data-tab="player" data-title="Player" data-subtitle="Your queue" data-controls="false"
-				hx-get="/player/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/player"
-				hx-on:click="selectTab('player')">Player</button>
+				hx-on:click="openPlayerTab(event)">Player</button>
 			<button class="tab" data-tab="playlists" data-title="Play Lists" data-subtitle="Built from your splits" data-controls="false"
 				hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/playlists"
 				hx-on:click="selectTab('playlists')">Play Lists</button>
@@ -852,6 +897,26 @@
 
 		document.addEventListener('DOMContentLoaded', loadViewFromURL);
 		window.addEventListener('popstate', loadViewFromURL);
+
+		// Open the player tab. When a queue is already loaded, render the full
+		// player from Player's in-memory state so the current song, position,
+		// queue and shuffle state survive the tab switch; otherwise fall back
+		// to the server-rendered empty view.
+		function openPlayerTab(e) {
+			e.preventDefault();
+			selectTab('player');
+			const url = Player.hasQueue ? Player.pageURL : '/player';
+			if (history.state && history.state.__gradio === url) {
+				history.replaceState({ __gradio: url }, '', url);
+			} else {
+				history.pushState({ __gradio: url }, '', url);
+			}
+			if (Player.hasQueue) {
+				renderFullPlayerFromState();
+			} else {
+				loadViewFromURL();
+			}
+		}
 
 		// ---------- Audio player (global singleton) ----------
 		// The audio element and all playback state live here, outside the
@@ -941,6 +1006,9 @@
 			function playAt(i) {
 				if (i < 0 || i >= queue.length) return;
 				index = i;
+				// Keep the page URL pointing at the song actually playing so a
+				// reload/bookmark reopens the same queue at the same song.
+				pageURL = queuePageURL(queueKey);
 				const t = queue[i];
 				audio.src = t.src;
 				audio.currentTime = 0;
@@ -992,13 +1060,15 @@
 				const normalized = tracks.map(t => ({
 					src: t.src,
 					title: t.title,
+					derivedTitle: t.derived_title || t.title,
 					split: String(t.id),
 					start: t.start,
 					end: t.end,
+					classification: t.classification || '',
 					rating: t.rating || 0,
 					plays: t.plays || 0,
 					sub: fmtTime(t.start) + ' – ' + fmtTime(t.end) + ' · ' +
-						(t.classification || '') + (t.plays ? ' · ♪ ' + t.plays : ''),
+						clsLabel(t.classification) + (t.plays ? ' · ♪ ' + t.plays : ''),
 				}));
 				loadQueue(normalized, { queueKey: 'shuffle', source: 'Global Shuffle', startIndex: 0, autoplay: true });
 				const wrap = document.querySelector('[data-player-wrap]');
@@ -1047,10 +1117,10 @@
 				queue = tracks || [];
 				queueKey = opts.queueKey || '';
 				source = opts.source || '';
-				pageURL = queuePageURL(queueKey);
 				if (opts.freshShuffle) shufflePlayed = new Set();
 				index = (typeof opts.startIndex === 'number') ? opts.startIndex : 0;
 				if (index < 0 || index >= queue.length) index = 0;
+				pageURL = queuePageURL(queueKey);
 				// Global shuffle is inherently shuffled: keep the toggle on so
 				// the button shows active for the whole session.
 				if (queueKey === 'shuffle') shuffle = true;
@@ -1064,14 +1134,17 @@
 			}
 
 			// Reconstruct the page URL for a queue key so the mini player can
-			// reopen the view that is actually playing.
+			// reopen the view that is actually playing. Playlist URLs carry the
+			// current song so a reload/bookmark resumes at the same track.
 			function queuePageURL(key) {
 				if (key === 'shuffle') return '/player?shuffle=1';
 				if (key && key.indexOf('radio:') === 0) {
 					return '/player?radio=' + encodeURIComponent(key.slice('radio:'.length));
 				}
 				if (key && key.indexOf('playlist:') === 0) {
-					return '/player?playlist=' + encodeURIComponent(key.slice('playlist:'.length));
+					const cur = current();
+					const song = cur && cur.split ? '&song=' + encodeURIComponent(cur.split) : '';
+					return '/player?playlist=' + encodeURIComponent(key.slice('playlist:'.length)) + song;
 				}
 				return '/player';
 			}
@@ -1202,7 +1275,15 @@
 			} else {
 				history.pushState({ __gradio: url }, '', url);
 			}
-			loadViewFromURL();
+			if (Player.hasQueue) {
+				// Render the full player from in-memory state so the current
+				// song, position, queue and shuffle state are preserved exactly
+				// (no server round-trip that could re-randomize the queue).
+				selectTab('player');
+				renderFullPlayerFromState();
+			} else {
+				loadViewFromURL();
+			}
 		});
 
 		// ---------- Full player view binding ----------
@@ -1222,6 +1303,8 @@
 				li.setAttribute('data-src', t.src);
 				li.setAttribute('data-title', t.title);
 				li.setAttribute('data-split', t.split);
+				li.setAttribute('data-classification', t.classification || '');
+				li.setAttribute('data-derived-title', t.derivedTitle || t.title);
 				const num = document.createElement('span');
 				num.className = 'queue-num';
 				num.textContent = String(i + 1);
@@ -1237,11 +1320,110 @@
 				info.appendChild(sub);
 				li.appendChild(num);
 				li.appendChild(info);
+				const edit = document.createElement('button');
+				edit.type = 'button';
+				edit.className = 'title-edit';
+				edit.setAttribute('data-title-edit', '');
+				edit.setAttribute('data-split', t.split);
+				edit.title = 'Rename this track';
+				edit.textContent = '✏️';
+				li.appendChild(edit);
 				li.addEventListener('click', () => Player.playAt(i));
 				ul.appendChild(li);
 			});
+			bindTitleEdits(ul);
 			const hdr = ul.closest('.queue') && ul.closest('.queue').querySelector('.queue-header span');
 			if (hdr) hdr.textContent = tracks.length + (tracks.length === 1 ? ' track' : ' tracks');
+		}
+
+		// Render the full player view entirely from Player's in-memory state.
+		// Used when opening the player from the mini player or the Player tab
+		// while a queue is loaded, so the current song, position, queue and
+		// shuffle state are preserved exactly without a server round-trip
+		// (which would re-randomize shuffle/radio queues and reset playback).
+		function renderFullPlayerFromState() {
+			if (!Player.hasQueue) { loadViewFromURL(); return; }
+			const cur = Player.current();
+			const startSplit = cur && cur.split ? String(cur.split) : '';
+			const wrap = document.createElement('div');
+			wrap.className = 'player-wrap';
+			wrap.setAttribute('data-player-wrap', '');
+			wrap.setAttribute('data-queue-key', Player.queueKey || '');
+			wrap.setAttribute('data-start-split', startSplit);
+			wrap.innerHTML = [
+				'<section class="surface player-card">',
+				'  <div class="player-cover" data-eq><span></span><span></span><span></span></div>',
+				'  <p class="player-title" data-player-title>Nothing playing</p>',
+				'  <p class="player-subtitle" data-player-subtitle></p>',
+				'  <audio data-audio preload="metadata"></audio>',
+				'  <div class="progress-row">',
+				'    <span data-time>0:00</span>',
+				'    <div class="progress-bar" data-progress-bar><div class="progress-fill" data-progress-fill></div></div>',
+				'    <span data-duration>0:00</span>',
+				'  </div>',
+				'  <div class="transport">',
+				'    <button type="button" class="icon-btn" data-player-shuffle title="Shuffle">&#128256;</button>',
+				'    <button type="button" class="icon-btn" data-player-prev title="Previous">&#9198;&#65039;</button>',
+				'    <button type="button" class="play-btn" data-player-toggle title="Play/Pause">&#9654;&#65039;</button>',
+				'    <button type="button" class="icon-btn" data-player-next title="Next">&#9197;&#65039;</button>',
+				'    <button type="button" class="icon-btn" data-player-repeat title="Repeat">&#128257;&#65039;</button>',
+				'  </div>',
+				'  <div class="volume-row">',
+				'    <button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>',
+				'    <input type="range" data-player-volume min="0" max="1" step="0.01">',
+				'  </div>',
+				'  <div class="rating-row">',
+				'    <button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>',
+				'    <button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>',
+				'  </div>',
+				'  <div class="sleep-row">',
+				'    <button type="button" class="icon-btn sleep-btn" data-player-sleep title="Sleep timer">&#127769;&#65039;</button>',
+				'    <span class="sleep-remaining" data-sleep-remaining></span>',
+				'    <div class="sleep-popup" data-sleep-popup hidden>',
+				'      <div class="sleep-popup-title">Sleep timer</div>',
+				'      <button type="button" data-sleep-min="5">5 min</button>',
+				'      <button type="button" data-sleep-min="10">10 min</button>',
+				'      <button type="button" data-sleep-min="15">15 min</button>',
+				'      <button type="button" data-sleep-min="30">30 min</button>',
+				'      <button type="button" data-sleep-min="60">60 min</button>',
+				'      <button type="button" class="sleep-off" data-sleep-off>Off</button>',
+				'    </div>',
+				'  </div>',
+				'  <div class="mark-row">',
+				'    <select data-classification-select disabled title="Classify the currently playing track">',
+				'      <option value="not_song">⏭️ Not Song / Short clip</option>',
+				'      <option value="likely_song">🎵 Likely Song</option>',
+				'      <option value="song">🎶 Song</option>',
+				'      <option value="commercial">📢 Commercial</option>',
+				'      <option value="informational">ℹ️ Informational</option>',
+				'      <option value="news">📰 News</option>',
+				'      <option value="re_split" disabled>✂️ Re-split</option>',
+				'    </select>',
+				'    <button type="button" data-player-merge-prev disabled title="This track started too soon: join the previous split on to it">&#9198;&#65039; Start Too Soon</button>',
+				'    <button type="button" data-player-merge-next disabled title="This track ended too soon: join the following split on to it">&#9197;&#65039; End Too Soon</button>',
+				'  </div>',
+				'  <p class="resplit-status" data-resplit-status hidden></p>',
+				'  <div class="shuffle-all-row">',
+				'    <button type="button" class="btn-play" data-player-shuffle-all title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>',
+				'  </div>',
+				'</section>',
+				'<aside class="surface queue">',
+				'  <div class="queue-header"><h2>Queue</h2><span></span></div>',
+				'  <ul data-player-queue></ul>',
+				'</aside>',
+			].join('\n');
+			const subtitleEl = wrap.querySelector('[data-player-subtitle]');
+			if (subtitleEl) subtitleEl.textContent = Player.source || 'Playlist';
+
+			const content = document.getElementById('content');
+			content.innerHTML = '';
+			content.appendChild(wrap);
+
+			// bindFullPlayer takes the reuse path (queueKey + start-split match
+			// the live queue) and rebuilds the visible list from Player.queue.
+			bindFullPlayer(content);
+			bindFullControls(wrap);
+			syncFullView(wrap);
 		}
 
 		function bindFullPlayer(root) {
@@ -1253,9 +1435,11 @@
 			const tracks = [...wrap.querySelectorAll('[data-player-track]')].map(li => ({
 				src: li.getAttribute('data-src'),
 				title: li.getAttribute('data-title'),
+				derivedTitle: li.getAttribute('data-derived-title') || li.getAttribute('data-title'),
 				split: li.getAttribute('data-split'),
 				start: parseFloat(li.getAttribute('data-start')),
 				end: parseFloat(li.getAttribute('data-end')),
+				classification: li.getAttribute('data-classification') || '',
 				sub: (li.querySelector('.queue-sub') || {}).textContent || '',
 				el: li,
 			}));
@@ -1264,7 +1448,11 @@
 			// request to start a different song, keep the current position.
 			if (Player.hasQueue && Player.queueKey === queueKey) {
 				const cur = Player.current();
-				const wantStart = startSplit && (!cur || String(cur.split) !== String(startSplit));
+				// The server renders data-start-split="0" when no ?song= param
+				// was given; treat that as "no explicit start" so re-rendering
+				// the view keeps the current position instead of restarting.
+				const wantStart = startSplit && startSplit !== '0' &&
+					(!cur || String(cur.split) !== String(startSplit));
 				if (!wantStart) {
 					// The server may have rendered a different shuffle batch than
 					// what is actually playing; rebuild the list from Player state.
@@ -1301,8 +1489,7 @@
 			const eq = wrap.querySelector('[data-eq]');
 			const sleepBtn = wrap.querySelector('[data-player-sleep]');
 			const sleepRemaining = wrap.querySelector('[data-sleep-remaining]');
-			const commercialBtn = wrap.querySelector('[data-player-commercial]');
-			const songBtn = wrap.querySelector('[data-player-song]');
+			const clsSelect = wrap.querySelector('[data-classification-select]');
 			const mergePrevBtn = wrap.querySelector('[data-player-merge-prev]');
 			const mergeNextBtn = wrap.querySelector('[data-player-merge-next]');
 			const rateBtns = wrap.querySelectorAll('[data-player-rate]');
@@ -1341,8 +1528,10 @@
 			if (sleepRemaining) {
 				sleepRemaining.textContent = Player.sleepActive ? '🌙 ' + Player.fmtTime(Player.sleepRemaining / 1000) : '';
 			}
-			if (commercialBtn) commercialBtn.disabled = !Player.hasQueue;
-			if (songBtn) songBtn.disabled = !Player.hasQueue;
+			if (clsSelect) {
+				clsSelect.disabled = !Player.hasQueue;
+				if (cur) clsSelect.value = cur.classification || '';
+			}
 			if (mergePrevBtn) mergePrevBtn.disabled = !Player.hasQueue;
 			if (mergeNextBtn) mergeNextBtn.disabled = !Player.hasQueue;
 			// Rating is a numeric like count; reflect it on the like button.
@@ -1353,34 +1542,124 @@
 			});
 		}
 
-		// PATCH the currently playing split's classification and show a brief
-		// green success state on the button that was clicked.
-		function bindMarkButton(wrap, btn, classification, doneLabel) {
-			btn.addEventListener('click', async () => {
+		// Emoji + description label for a classification value, mirroring the
+		// Go-side clsLabel so the queue sub-lines stay consistent.
+		function clsLabel(cls) {
+			switch (cls) {
+				case 'not_song': return '⏭️ Not Song / Short clip';
+				case 'likely_song': return '🎵 Likely Song';
+				case 'song': return '🎶 Song';
+				case 'commercial': return '📢 Commercial';
+				case 'informational': return 'ℹ️ Informational';
+				case 'news': return '📰 News';
+				case 're_split': return '✂️ Re-split';
+				default: return cls || '';
+			}
+		}
+
+		// PATCH the currently playing split's classification when the dropdown
+		// changes and show a brief green success state on the select.
+		function bindClassificationSelect(wrap, select) {
+			select.addEventListener('change', async () => {
 				const cur = Player.current();
 				if (!cur || !cur.split) return;
-				const label = btn.textContent;
+				const classification = select.value;
+				const prev = cur.classification || '';
 				try {
 					const res = await fetch('/splits/' + cur.split, {
 						method: 'PATCH',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ classification: classification }),
 					});
-					if (!res.ok) return;
+					if (!res.ok) { select.value = prev; return; }
+					cur.classification = classification;
 					const items = wrap.querySelectorAll('[data-player-track]');
 					const item = items[Player.index];
 					if (item) {
 						const cls = item.querySelector('[data-cls]');
-						if (cls) cls.textContent = classification;
+						if (cls) cls.textContent = clsLabel(classification);
+						item.setAttribute('data-classification', classification);
 					}
-					btn.textContent = doneLabel;
-					btn.classList.add('success');
-					setTimeout(() => {
-						btn.textContent = label;
-						btn.classList.remove('success');
-					}, 2000);
-				} catch (err) { /* ignore network errors */ }
+					select.classList.add('success');
+					setTimeout(() => select.classList.remove('success'), 2000);
+				} catch (err) { select.value = prev; }
 			});
+		}
+
+		// Inline rename for a split's display title. The ✏️ button next to a
+		// title swaps it for an input + Save/Cancel; saving PATCHes
+		// /splits/{id} with {custom_title} and updates the DOM and Player state.
+		function bindTitleEdits(root) {
+			if (!root || !root.querySelectorAll) return;
+			root.querySelectorAll('[data-title-edit]').forEach(btn => {
+				if (btn.dataset.bound) return;
+				btn.dataset.bound = '1';
+				btn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					const splitId = btn.getAttribute('data-split');
+					const row = btn.closest('[data-player-track]') || btn.closest('tr') || btn.parentElement;
+					if (!row) return;
+					const titleEl = row.querySelector('.queue-title') || row.querySelector('.split-title');
+					if (!titleEl || row.querySelector('.title-edit-wrap')) return;
+					const input = document.createElement('input');
+					input.type = 'text';
+					input.className = 'title-edit-input';
+					input.value = titleEl.textContent;
+					const save = document.createElement('button');
+					save.type = 'button';
+					save.textContent = 'Save';
+					const cancel = document.createElement('button');
+					cancel.type = 'button';
+					cancel.className = 'title-edit-cancel';
+					cancel.textContent = 'Cancel';
+					const wrap = document.createElement('span');
+					wrap.className = 'title-edit-wrap';
+					wrap.appendChild(input);
+					wrap.appendChild(save);
+					wrap.appendChild(cancel);
+					titleEl.replaceWith(wrap);
+					input.focus();
+					input.select();
+					const finish = (commit) => {
+						if (commit) {
+							saveTitle(splitId, input.value.trim(), row, titleEl, wrap);
+						} else {
+							wrap.replaceWith(titleEl);
+						}
+					};
+					save.addEventListener('click', (ev) => { ev.stopPropagation(); finish(true); });
+					cancel.addEventListener('click', (ev) => { ev.stopPropagation(); finish(false); });
+					input.addEventListener('keydown', (ev) => {
+						if (ev.key === 'Enter') { ev.stopPropagation(); finish(true); }
+						else if (ev.key === 'Escape') { ev.stopPropagation(); finish(false); }
+					});
+				});
+			});
+		}
+
+		async function saveTitle(splitId, val, row, titleEl, wrap) {
+			try {
+				const res = await fetch('/splits/' + splitId, {
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ custom_title: val }),
+				});
+				if (!res.ok) { wrap.replaceWith(titleEl); return; }
+				const derived = row.getAttribute('data-derived-title') || titleEl.textContent;
+				const newTitle = val ? val : derived;
+				titleEl.textContent = newTitle;
+				wrap.replaceWith(titleEl);
+				if (row.hasAttribute('data-player-track')) {
+					row.setAttribute('data-title', newTitle);
+					row.setAttribute('data-custom-title', val);
+					const items = row.parentElement ? [...row.parentElement.querySelectorAll('[data-player-track]')] : [];
+					const idx = items.indexOf(row);
+					if (idx >= 0 && Player.queue[idx]) {
+						Player.queue[idx].title = newTitle;
+					}
+					renderAll();
+				}
+			} catch (err) { wrap.replaceWith(titleEl); }
 		}
 
 		// Merge the currently playing split with its neighbor (prev=true joins
@@ -1429,8 +1708,7 @@
 			const bar = wrap.querySelector('[data-progress-bar]');
 			const sleepBtn = wrap.querySelector('[data-player-sleep]');
 			const sleepPopup = wrap.querySelector('[data-sleep-popup]');
-			const commercialBtn = wrap.querySelector('[data-player-commercial]');
-			const songBtn = wrap.querySelector('[data-player-song]');
+			const clsSelect = wrap.querySelector('[data-classification-select]');
 			const mergePrevBtn = wrap.querySelector('[data-player-merge-prev]');
 			const mergeNextBtn = wrap.querySelector('[data-player-merge-next]');
 			const shuffleAllBtn = wrap.querySelector('[data-player-shuffle-all]');
@@ -1467,10 +1745,10 @@
 					sleepPopup.hidden = true;
 				});
 			}
-			if (commercialBtn) bindMarkButton(wrap, commercialBtn, 'commercial', '✓ Marked Commercial');
-			if (songBtn) bindMarkButton(wrap, songBtn, 'song', '✓ Marked as Song');
+			if (clsSelect) bindClassificationSelect(wrap, clsSelect);
 			if (mergePrevBtn) bindMergeButton(wrap, mergePrevBtn, true, '✓ Joined Previous Split');
 			if (mergeNextBtn) bindMergeButton(wrap, mergeNextBtn, false, '✓ Joined Next Split');
+			bindTitleEdits(wrap);
 			const statusEl = wrap.querySelector('[data-resplit-status]');
 			const barEl = wrap.querySelector('[data-progress-bar]');
 			if (barEl) barEl.addEventListener('contextmenu', async (e) => {
@@ -1558,6 +1836,7 @@
 					syncFullView(wrap);
 				}
 			}
+			bindTitleEdits(target);
 		});
 
 		// Close any open sleep timer popup when clicking outside of it.

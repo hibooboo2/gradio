@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -28,6 +28,15 @@ import (
 )
 
 var speakerOnce sync.Once
+
+// insecureClient skips TLS certificate verification for audio stream fetches.
+// Many radio streams are served over HTTPS with self-signed or otherwise
+// invalid certificates, so we accept them rather than failing to record/play.
+var insecureClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
+}
 
 // sharedProgress renders one combined progress bar display shared by all radio
 // recorders. It is created once when recording is enabled so every radio's bar
@@ -70,7 +79,12 @@ func (rs *recorderSet) start(name, url string) bool {
 	rs.g.Go(func() error {
 		defer rs.deleteRecorder(name)
 		slog.InfoContext(ctx, "Starting recorder", "radio", name, "url", url)
-		rec.Run(ctx)
+		err := rec.RecordOnce(ctx, time.Hour)
+		if err != nil {
+			slog.ErrorContext(ctx, "REcord once returned", "err", err)
+			return nil
+		}
+		slog.InfoContext(ctx, "RecordOnce finished no error")
 		return nil
 	})
 	return true
@@ -132,8 +146,6 @@ func main() {
 	glog.Init()
 
 	recordDB = CreateDBHandle()
-
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	play := flag.Bool("play", false, "play audio while recording")
 	record := flag.Bool("record", false, "record radio stations")
@@ -263,7 +275,7 @@ func main() {
 		slog.ErrorContext(ctx, "Recorder group done", "err", werr)
 	}
 
-	log.Println("shutdown complete")
+	slog.Info("shutdown complete")
 }
 
 type Recorder struct {
@@ -285,7 +297,7 @@ func (r *Recorder) recordFileToDB(fullName string, started time.Time, size int64
 	}
 
 	if _, err := insertRecording(fullName, r.radioName, started, size); err != nil {
-		log.Printf("record %s to db: %v", fullName, err)
+		slog.Error("record to db", "filename", fullName, "err", err)
 		return
 	}
 
@@ -302,7 +314,6 @@ func (r *Recorder) Run(ctx context.Context) {
 		default:
 		}
 
-		slog.InfoContext(ctx, "Starting recording", r.url)
 		if err := r.RecordOnce(ctx, time.Minute*60); err != nil {
 			if ctx.Err() != nil {
 				slog.ErrorContext(ctx, "Conext had an error", "err", ctx.Err())
@@ -324,6 +335,8 @@ func (r *Recorder) Run(ctx context.Context) {
 }
 
 func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) error {
+	slog.InfoContext(ctx, "Record once called", "radioName", r.radioName, "streamURL", r.url)
+
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -334,15 +347,17 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := insecureClient.Do(req)
 	if err != nil {
+		slog.ErrorContext(ctx, "Failed to get resp", "err", err)
 		return err
 	}
 	defer resp.Body.Close()
 
-	log.Printf("recording connected (%s)", resp.Status)
+	slog.Info("recording connected", "status", resp.Status)
 
-	if err := r.rotate(); err != nil {
+	if err := r.rotate(ctx); err != nil {
+		slog.ErrorContext(ctx, "Rotate had an error", "err", err)
 		return err
 	}
 	defer func() {
@@ -379,8 +394,9 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 				}
 				currentLoop = time.Now()
 			}
-			err = r.rotate()
+			err = r.rotate(ctx)
 			if err != nil {
+				slog.ErrorContext(ctx, "rotate failed", "err", err)
 				return fmt.Errorf("failed to rotate file during recording")
 			}
 			currentLoop = time.Now()
@@ -390,11 +406,13 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 
 		if n > 0 {
 			if _, werr := r.write(buf[:n]); werr != nil {
+				slog.ErrorContext(ctx, "Write failed", "werr", werr)
 				return werr
 			}
 		}
 
 		if err != nil {
+			slog.ErrorContext(ctx, "Failed to read body", "err", err)
 			if err == io.EOF {
 				return err
 			}
@@ -403,6 +421,7 @@ func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) err
 
 		select {
 		case <-ctx.Done():
+			slog.ErrorContext(ctx, "Context is done", "radio", r.radioName)
 			return nil
 		default:
 		}
@@ -466,11 +485,12 @@ func (r *Recorder) storeToDisk() bool {
 	return false
 }
 
-func (r *Recorder) rotate() error {
+func (r *Recorder) rotate(ctx context.Context) error {
+	slog.InfoContext(ctx, "Rotate recorder called", "radioName", r.radioName)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := os.MkdirAll(filepath.Join("recordings", r.radioName), 0755); err != nil {
+	if err := os.MkdirAll(RecordingsDir(r.radioName), 0755); err != nil {
 		return err
 	}
 
@@ -479,8 +499,7 @@ func (r *Recorder) rotate() error {
 	now := time.Now()
 
 	filename := filepath.Join(
-		"recordings",
-		r.radioName,
+		RecordingsDir(r.radioName),
 		fmt.Sprintf(
 			"gradio-%s.mp3",
 			now.Format("2006-01-02_15-04-05"),
@@ -575,7 +594,7 @@ func PlayStream(ctx context.Context) {
 				return
 			}
 
-			log.Printf("playback error: %v", err)
+			slog.Error("playback error", "err", err)
 
 			select {
 			case <-ctx.Done():
@@ -598,13 +617,13 @@ func playOnce(ctx context.Context) error {
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := insecureClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	log.Printf("playback connected (%s)", resp.Status)
+	slog.Info("playback connected", "status", resp.Status)
 
 	streamer, format, err := mp3.Decode(resp.Body)
 	if err != nil {

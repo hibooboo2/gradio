@@ -129,7 +129,7 @@ func fetchPlaylistSongs(playlistID int64) ([]PlaylistSong, error) {
 
 	rows, err := recordDB.Query(
 		`SELECT ps.playlist_id, ps.split_id, ps.position,
-		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM playlist_splits ps
 		 JOIN splits s ON s.id = ps.split_id
@@ -149,7 +149,7 @@ func fetchPlaylistSongs(playlistID int64) ([]PlaylistSong, error) {
 		if err := rows.Scan(
 			&song.PlaylistID, &song.SplitID, &song.Position,
 			&song.Split.ID, &song.Split.RecordingID, &song.Split.SourcePath, &song.Split.Index,
-			&song.Split.Start, &song.Split.End, &song.Split.OutputPath, &song.Split.Classification,
+			&song.Split.Start, &song.Split.End, &song.Split.OutputPath, &song.Split.Classification, &song.Split.CustomTitle,
 			&song.Plays, &song.Rating,
 		); err != nil {
 			return nil, err
@@ -195,12 +195,22 @@ func fetchAllSongs() ([]Split, error) {
 	return fetchAllSplits()
 }
 
-// songTitle produces a human-friendly label for a split's output file, e.g.
-// "Slotex · gradio-2026-08-19_09-47-01 #3".
-func songTitle(s Split) string {
+// derivedSongTitle produces the default human-friendly label for a split's
+// output file, e.g. "Slotex · gradio-2026-08-19_09-47-01 #3".
+func derivedSongTitle(s Split) string {
 	base := strings.TrimSuffix(filepath.Base(s.SourcePath), filepath.Ext(s.SourcePath))
 	radio := radioFromPath(s.SourcePath)
 	return fmt.Sprintf("%s · %s #%d", radio, base, s.Index+1)
+}
+
+// songTitle produces the display label for a split. A user-set custom title
+// (a display-only rename) wins; otherwise the title is derived from the source
+// file name and stream position.
+func songTitle(s Split) string {
+	if s.CustomTitle != "" {
+		return s.CustomTitle
+	}
+	return derivedSongTitle(s)
 }
 
 // musicURL returns the web URL that serves a split's output file, based on the
@@ -246,9 +256,12 @@ const radioQueueSize = 100
 const shuffleBatchSize = 5
 
 var viewFuncs = template.FuncMap{
-	"musicURL":  musicURL,
-	"songTitle": songTitle,
-	"urlq":      url.QueryEscape,
+	"musicURL":              musicURL,
+	"songTitle":             songTitle,
+	"derivedSongTitle":      derivedSongTitle,
+	"clsLabel":              clsLabel,
+	"classificationOptions": func() []classificationOption { return classificationOptions },
+	"urlq":                  url.QueryEscape,
 	"timeStr": func(seconds float64) string {
 		if seconds < 0 {
 			return "0:00"
@@ -312,7 +325,7 @@ var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFu
 						hx-on:click="selectTab('player', false)">&#9654;</a>
 					<div class="song-info">
 						<span class="song-title">{{songTitle .Split}}</span>
-						<span class="song-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; {{.Split.Classification}}</span>
+						<span class="song-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; {{clsLabel .Split.Classification}}</span>
 					</div>
 					<button class="btn-remove" title="Remove from playlist"
 						hx-post="/playlists/{{$pl.ID}}/songs/{{.Split.ID}}/delete"
@@ -401,8 +414,11 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 		</div>
 
 		<div class="mark-row">
-			<button type="button" data-player-song disabled title="Classify the currently playing track as a song">&#127925; Mark as Song</button>
-			<button type="button" data-player-commercial disabled title="Classify the currently playing track as a commercial">&#128226; Mark Commercial</button>
+			<select data-classification-select disabled title="Classify the currently playing track">
+				{{range classificationOptions}}
+				<option value="{{.Value}}"{{if eq .Value "re_split"}} disabled{{end}}>{{.Label}}</option>
+				{{end}}
+			</select>
 			<button type="button" data-player-merge-prev disabled title="This track started too soon: join the previous split on to it">&#9198;&#65039; Start Too Soon</button>
 			<button type="button" data-player-merge-next disabled title="This track ended too soon: join the following split on to it">&#9197;&#65039; End Too Soon</button>
 		</div>
@@ -429,12 +445,16 @@ var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).P
 				data-title="{{songTitle .Split}}"
 				data-split="{{.Split.ID}}"
 				data-start="{{.Split.Start}}"
-				data-end="{{.Split.End}}">
+				data-end="{{.Split.End}}"
+				data-classification="{{.Split.Classification}}"
+				data-derived-title="{{derivedSongTitle .Split}}"
+				data-custom-title="{{.Split.CustomTitle}}">
 				<span class="queue-num">{{.Position | printf "%d"}}</span>
 				<div class="queue-info">
 					<span class="queue-title">{{songTitle .Split}}</span>
-					<span class="queue-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; <span data-cls>{{.Split.Classification}}</span>{{if .Plays}} &middot; &#9835; {{.Plays}} play{{if ne .Plays 1}}s{{end}}{{end}}</span>
+					<span class="queue-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; <span data-cls>{{clsLabel .Split.Classification}}</span>{{if .Plays}} &middot; &#9835; {{.Plays}} play{{if ne .Plays 1}}s{{end}}{{end}}</span>
 				</div>
+				<button type="button" class="title-edit" data-title-edit data-split="{{.Split.ID}}" title="Rename this track">&#9999;&#65039;</button>
 			</li>
 			{{end}}
 		</ul>
@@ -489,6 +509,7 @@ type playerEmptyData struct {
 type shuffleTrack struct {
 	ID             int64   `json:"id"`
 	Title          string  `json:"title"`
+	DerivedTitle   string  `json:"derived_title"`
 	Src            string  `json:"src"`
 	Start          float64 `json:"start"`
 	End            float64 `json:"end"`
@@ -806,6 +827,7 @@ func handleShuffleJSON(w http.ResponseWriter, r *http.Request) {
 		tracks = append(tracks, shuffleTrack{
 			ID:             s.ID,
 			Title:          songTitle(s),
+			DerivedTitle:   derivedSongTitle(s),
 			Src:            musicURL(s.OutputPath),
 			Start:          s.Start,
 			End:            s.End,

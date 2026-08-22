@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +66,9 @@ type Split struct {
 	End            float64
 	OutputPath     string
 	Classification string
+	// CustomTitle overrides the derived display title (songTitle). It is a
+	// display-only rename: the source/output files are never touched.
+	CustomTitle string `json:"custom_title"`
 	// Plays and Rating are populated only when a query joins the song_plays
 	// table (player queues, global shuffle). Rating is the like count.
 	Plays  int
@@ -103,6 +108,60 @@ func splitID(sourcePath string, start, end float64) int64 {
 	return contentID(sourcePath, strconv.FormatFloat(start, 'f', -1, 64), strconv.FormatFloat(end, 'f', -1, 64))
 }
 
+// RadioHash returns a deterministic hex-encoded SHA-256 digest of a station
+// name. Recordings and split output are stored under this hash instead of the
+// raw name so station names containing slashes, spaces, or other path-hostile
+// characters never break path construction.
+func RadioHash(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:])
+}
+
+// RecordingsDir returns the directory a station's recordings are stored in.
+// The directory is keyed by the hash of the station name rather than the name
+// itself, so any station name is safe to use on disk.
+func RecordingsDir(radio string) string {
+	return filepath.Join("recordings", RadioHash(radio))
+}
+
+// isHexHash reports whether s is a 64-character hex string, i.e. a SHA-256
+// digest used as a hashed recordings directory.
+func isHexHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f':
+		case c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// radioDisplayName resolves a hashed recordings directory back to the original
+// station name by looking it up in the recordings table. When dir is not a
+// hash, or the lookup fails, dir is returned unchanged so legacy (un-hashed)
+// paths keep working.
+func radioDisplayName(dir string) string {
+	if !isHexHash(dir) || recordDB == nil {
+		return dir
+	}
+
+	var radio string
+	err := recordDB.QueryRow(
+		`SELECT radio FROM recordings WHERE source_path LIKE $1 LIMIT 1`,
+		"%"+dir+"/%",
+	).Scan(&radio)
+	if err != nil {
+		return dir
+	}
+	return radio
+}
+
 func CreateDBHandle() *sql.DB {
 	dsn := recordDBPath
 	if env := os.Getenv("DATABASE_URL"); env != "" {
@@ -111,7 +170,8 @@ func CreateDBHandle() *sql.DB {
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatalf("recordings: open db: %v", err)
+		slog.Error("recordings: open db", "err", err)
+		os.Exit(1)
 		return nil
 	}
 
@@ -122,10 +182,12 @@ func CreateDBHandle() *sql.DB {
 	db.SetMaxIdleConns(5)
 
 	if err := createSchema(db); err != nil {
-		log.Fatalf("recordings: create tables: %v", err)
+		slog.Error("recordings: create tables", "err", err)
+		os.Exit(1)
 		return nil
 	}
 
+	recordDB = db
 	return db
 }
 
@@ -152,6 +214,7 @@ func createSchema(db *sql.DB) error {
 			end_seconds   DOUBLE PRECISION NOT NULL,
 			output_path   STRING NOT NULL,
 			classification STRING NOT NULL DEFAULT '',
+			custom_title  STRING NOT NULL DEFAULT '',
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
@@ -209,6 +272,14 @@ func createSchema(db *sql.DB) error {
 			favorited_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Migration for databases created before custom_title existed. Fresh
+	// databases already have the column from the CREATE TABLE above, so this
+	// is a no-op for them.
+	_, err = db.Exec(`ALTER TABLE splits ADD COLUMN IF NOT EXISTS custom_title STRING NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -344,10 +415,10 @@ func insertSplit(s Split) error {
 	}
 
 	_, err := recordDB.Exec(
-		`INSERT INTO splits (id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO splits (id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (id) DO NOTHING`,
-		s.ID, s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath, s.Classification,
+		s.ID, s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath, s.Classification, s.CustomTitle,
 	)
 	return err
 }
@@ -361,7 +432,7 @@ func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification
+		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE recording_id = $1
 		 ORDER BY position ASC`,
@@ -375,7 +446,7 @@ func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
@@ -392,7 +463,7 @@ func fetchAllSplits() ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title
 		 FROM splits s
 		 ORDER BY s.created_at DESC, s.id`,
 	)
@@ -404,7 +475,7 @@ func fetchAllSplits() ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
@@ -421,11 +492,11 @@ func fetchSplit(id int64) (Split, error) {
 
 	var s Split
 	err := recordDB.QueryRow(
-		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification
+		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE id = $1`,
 		id,
-	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification)
+	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle)
 	if err != nil {
 		return Split{}, err
 	}
@@ -441,9 +512,9 @@ func updateSplit(s Split) error {
 
 	_, err := recordDB.Exec(
 		`UPDATE splits
-		 SET start_seconds = $1, end_seconds = $2, classification = $3
-		 WHERE id = $4`,
-		s.Start, s.End, s.Classification, s.ID,
+		 SET start_seconds = $1, end_seconds = $2, classification = $3, custom_title = $4
+		 WHERE id = $5`,
+		s.Start, s.End, s.Classification, s.CustomTitle, s.ID,
 	)
 	return err
 }
@@ -461,6 +532,30 @@ func fetchRecordingByPath(sourcePath string) (Recording, error) {
 		 FROM recordings
 		 WHERE source_path = $1`,
 		sourcePath,
+	).Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status)
+	if err != nil {
+		return Recording{}, err
+	}
+	if t, err := time.Parse(time.RFC3339, recordedAt); err == nil {
+		r.RecordedAt = t
+	}
+
+	return r, nil
+}
+
+// fetchRecordingByID returns the recording row for a recording id.
+func fetchRecordingByID(id int64) (Recording, error) {
+	if recordDB == nil {
+		return Recording{}, fmt.Errorf("nil db")
+	}
+
+	var r Recording
+	var recordedAt string
+	err := recordDB.QueryRow(
+		`SELECT id, source_path, radio, recorded_at, size_bytes, status
+		 FROM recordings
+		 WHERE id = $1`,
+		id,
 	).Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status)
 	if err != nil {
 		return Recording{}, err
@@ -551,7 +646,7 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
 		 JOIN recordings r ON r.id = s.recording_id
@@ -569,7 +664,7 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.Plays, &s.Rating); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle, &s.Plays, &s.Rating); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
@@ -603,7 +698,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 	}
 
 	rows, err := recordDB.Query(
-		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification,
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
@@ -620,7 +715,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 	var splits []Split
 	for rows.Next() {
 		var s Split
-		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.Plays, &s.Rating); err != nil {
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle, &s.Plays, &s.Rating); err != nil {
 			return nil, err
 		}
 		splits = append(splits, s)
@@ -794,7 +889,7 @@ func fetchRadioStations() ([]RadioStation, error) {
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 			FROM radio_stations
 			order by random()
-			LIMIT 100
+			LIMIT 20
 		 `,
 	)
 	if err != nil {

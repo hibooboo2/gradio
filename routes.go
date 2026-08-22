@@ -184,6 +184,10 @@ type updateSplitRequest struct {
 	Start          *float64 `json:"start"`
 	End            *float64 `json:"end"`
 	Classification *string  `json:"classification"`
+	// CustomTitle is the display-only rename for the split. "title" is
+	// accepted as an alias for backward compatibility.
+	CustomTitle *string `json:"custom_title"`
+	Title       *string `json:"title"`
 }
 
 func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
@@ -213,6 +217,11 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Classification != nil {
 		split.Classification = *req.Classification
+	}
+	if req.CustomTitle != nil {
+		split.CustomTitle = *req.CustomTitle
+	} else if req.Title != nil {
+		split.CustomTitle = *req.Title
 	}
 
 	if err := updateSplit(split); err != nil {
@@ -375,7 +384,7 @@ func handleMergeSplit(w http.ResponseWriter, r *http.Request) {
 
 // splitsViewTemplate renders the htmx fragment listing all splits, grouped by
 // radio with a color-coded badge per radio.
-var splitsViewTemplate = template.Must(template.New("splits").Parse(`
+var splitsViewTemplate = template.Must(template.New("splits").Funcs(viewFuncs).Parse(`
 {{range .}}
 <section class="radio-group">
 	<h2>
@@ -386,6 +395,7 @@ var splitsViewTemplate = template.Must(template.New("splits").Parse(`
 		<thead>
 			<tr>
 				<th>ID</th>
+				<th>Title</th>
 				<th>Recording</th>
 				<th>#</th>
 				<th>Start</th>
@@ -399,16 +409,20 @@ var splitsViewTemplate = template.Must(template.New("splits").Parse(`
 			{{range .Splits}}
 			<tr class="cls-{{.Classification}}">
 				<td>{{.ID}}</td>
+				<td>
+					<span class="split-title" data-derived-title="{{derivedSongTitle .}}">{{songTitle .}}</span>
+					<button type="button" class="title-edit" data-title-edit data-split="{{.ID}}" title="Rename this track">&#9999;&#65039;</button>
+				</td>
 				<td>{{.SourcePath}}</td>
 				<td>{{.Index}}</td>
 				<td>{{printf "%.1f" .Start}}</td>
 				<td>{{printf "%.1f" .End}}</td>
 				<td>{{printf "%.1f" .Duration}}</td>
-				<td>{{.Classification}}</td>
+				<td>{{clsLabel .Classification}}</td>
 				<td>{{.OutputPath}}</td>
 			</tr>
 			{{else}}
-			<tr><td colspan="8">No splits in this radio.</td></tr>
+			<tr><td colspan="9">No splits in this radio.</td></tr>
 			{{end}}
 		</tbody>
 	</table>
@@ -480,12 +494,14 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 }
 
 // radioFromPath extracts the radio name from a source file path. Files are
-// stored as recordings/<radio>/<file>.mp3, or directly in recordings/ when no
-// radio directory is present.
+// stored as recordings/<hash>/<file>.mp3 (or recordings/<radio>/<file>.mp3 for
+// legacy recordings), or directly in recordings/ when no radio directory is
+// present. A hashed directory is resolved back to the original station name
+// via the recordings table so the UI shows display names, not hashes.
 func radioFromPath(path string) string {
 	dir := filepath.Base(filepath.Dir(path))
 	if dir == "." || dir == "" || dir == "recordings" {
 		return "manual"
 	}
-	return dir
+	return radioDisplayName(dir)
 }

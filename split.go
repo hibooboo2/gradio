@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"math"
 	"os"
@@ -46,12 +45,58 @@ const (
 	// Classifications assigned to a split when it is first created. A split
 	// under a minute is unlikely to be a full song; anything at or over a
 	// minute is a probable song.
-	classificationNotSong    = "not_song"
-	classificationLikelySong = "likely_song"
-	classificationCommercial = "commercial"
-	classificationSong       = "song"
-	classificationReSplit    = "re_split"
+	classificationNotSong       = "not_song"
+	classificationLikelySong    = "likely_song"
+	classificationCommercial    = "commercial"
+	classificationSong          = "song"
+	classificationReSplit       = "re_split"
+	classificationInformational = "informational"
+	classificationNews          = "news"
 )
+
+// classificationOption pairs a classification value with the emoji + label
+// shown in the UI dropdowns. The order here is the order the options appear.
+type classificationOption struct {
+	Value string
+	Label string
+}
+
+// classificationOptions is the central list of every classification a split
+// may carry, used by the UI dropdowns and for validation.
+var classificationOptions = []classificationOption{
+	{Value: classificationNotSong, Label: "⏭️ Not Song / Short clip"},
+	{Value: classificationLikelySong, Label: "🎵 Likely Song"},
+	{Value: classificationSong, Label: "🎶 Song"},
+	{Value: classificationCommercial, Label: "📢 Commercial"},
+	{Value: classificationInformational, Label: "ℹ️ Informational"},
+	{Value: classificationNews, Label: "📰 News"},
+	{Value: classificationReSplit, Label: "✂️ Re-split"},
+}
+
+// validClassifications is the set of classification values a split may carry.
+var validClassifications = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(classificationOptions))
+	for _, o := range classificationOptions {
+		m[o.Value] = struct{}{}
+	}
+	return m
+}()
+
+// isValidClassification reports whether cls is one of the known classifications.
+func isValidClassification(cls string) bool {
+	_, ok := validClassifications[cls]
+	return ok
+}
+
+// clsLabel returns the emoji + description label for a classification value.
+func clsLabel(cls string) string {
+	for _, o := range classificationOptions {
+		if o.Value == cls {
+			return o.Label
+		}
+	}
+	return cls
+}
 
 // errCutOutsideSplit is returned when a resplit cut time falls outside a
 // split's boundaries.
@@ -75,7 +120,8 @@ func memoizeDBHandle() *sql.DB {
 	memoizeDBOnce.Do(func() {
 		db, err := sql.Open("pgx", defaultDBPath)
 		if err != nil {
-			log.Fatalf("memoize: open db: %v", err)
+			slog.Error("memoize: open db", "err", err)
+			os.Exit(1)
 			return
 		}
 
@@ -85,7 +131,8 @@ func memoizeDBHandle() *sql.DB {
 			result STRING NOT NULL,
 			PRIMARY KEY (op, input)
 		)`); err != nil {
-			log.Fatalf("memoize: create table: %v", err)
+			slog.Error("memoize: create table", "err", err)
+			os.Exit(1)
 			return
 		}
 
@@ -113,10 +160,10 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 		case err == sql.ErrNoRows:
 			// No cached result, run f below.
 		case err != nil:
-			log.Printf("memoize: query: %v", err)
+			slog.Error("memoize: query", "err", err)
 		default:
 			if err := json.Unmarshal([]byte(data), &result); err != nil {
-				log.Printf("memoize: unmarshal: %v", err)
+				slog.Error("memoize: unmarshal", "err", err)
 			} else {
 				return result, nil
 			}
@@ -131,7 +178,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 	if memoizeDB != nil {
 		data, err := json.Marshal(result)
 		if err != nil {
-			log.Printf("memoize: marshal: %v", err)
+			slog.Error("memoize: marshal", "err", err)
 			return result, nil
 		}
 
@@ -140,7 +187,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 			 ON CONFLICT(op, input) DO UPDATE SET result = excluded.result`,
 			opName(f), inputPath, string(data),
 		); err != nil {
-			log.Printf("memoize: store: %v", err)
+			slog.Error("memoize: store", "err", err)
 		}
 	}
 
@@ -160,6 +207,9 @@ func SplitStream(ctx context.Context, fname string) error {
 	if radio == "." || radio == "" {
 		radio = "manual"
 	}
+	// When the file lives under a hashed recordings directory, resolve the hash
+	// back to the original station name so the DB stores the display name.
+	radio = radioDisplayName(radio)
 	id, err := insertRecording(fname, radio, info.ModTime(), info.Size())
 	if err != nil {
 		return err
@@ -357,6 +407,11 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Spl
 	}
 
 	radio := radioFromPath(orig.SourcePath)
+	// Prefer the original station name from the recordings table: the source
+	// path's directory is a hash, not the display name.
+	if rec, err := fetchRecordingByID(orig.RecordingID); err == nil {
+		radio = rec.Radio
+	}
 
 	outA, err := writeSegment(ctx, radio, inputPath, orig.Start, cut, positions[0])
 	if err != nil {
@@ -481,6 +536,11 @@ func mergeSplit(ctx context.Context, splitID int64, prev bool) (current Split, o
 	}
 
 	radio := radioFromPath(cur.SourcePath)
+	// Prefer the original station name from the recordings table: the source
+	// path's directory is a hash, not the display name.
+	if rec, err := fetchRecordingByID(cur.RecordingID); err == nil {
+		radio = rec.Radio
+	}
 
 	out, err := writeSegment(ctx, radio, inputPath, start, end, positions[0])
 	if err != nil {
@@ -617,9 +677,11 @@ func classifySplit(start, end float64) string {
 }
 
 // splitOutputDir returns the directory a source recording's split output files
-// are written to: one folder per source file, nested under its radio.
+// are written to: one folder per source file, nested under its radio. The
+// radio segment is the hash of the station name so names with slashes or other
+// path-hostile characters never break the output path.
 func splitOutputDir(radio, inputPath string) string {
-	return filepath.Join("split_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
+	return filepath.Join("split_music", RadioHash(radio), strings.Split(filepath.Base(inputPath), ".")[0])
 }
 
 // splitOutputPath returns the deterministic path a split's output file will

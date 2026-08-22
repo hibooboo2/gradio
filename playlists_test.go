@@ -246,6 +246,11 @@ func TestStationsView(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 
+	// The stations view renders each station's recording state via the package
+	// recorder manager, which is normally initialized in main(). Tests must
+	// create one so the view does not dereference a nil manager.
+	recorderManager = NewRecorderSet(t.Context())
+
 	require.NoError(t, upsertRadioStations([]RadioStation{
 		{StationUUID: "station-1", Name: "Alpha FM", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
 		{StationUUID: "station-2", Name: "Beta Radio", URLResolved: "https://b.example/stream", CountryCode: "DE", LanguageCodes: "ger"},
@@ -300,7 +305,7 @@ func TestStationsView(t *testing.T) {
 
 	favs, err := fetchFavoriteUUIDs()
 	require.NoError(t, err)
-	require.True(t, favs["station-1"])
+	require.Contains(t, favs, "station-1")
 	require.NotContains(t, favs, "station-2")
 
 	// The Favorites tab lists only favorited stations.

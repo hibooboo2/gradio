@@ -33,7 +33,7 @@ var stationsViewTemplate = template.Must(template.New("stations").Funcs(viewFunc
 				<span class="station-favicon">
 					{{if .Favicon}}<img src="{{.Favicon}}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">{{else}}&#128276;{{end}}
 				</span>
-				<span class="station-name">{{.Name}}</span>
+				<span class="station-name">{{if .URLResolved}}<a href="{{.URLResolved}}" target="_blank" rel="noopener noreferrer" title="{{.URLResolved}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</span>
 				{{if .Favorited}}<span class="station-star" title="Favorited">&#11088;</span>{{end}}
 			</td>
 			<td>{{if .CountryCode}}{{.CountryCode}}{{else}}&mdash;{{end}}</td>
@@ -89,7 +89,7 @@ var favoritesViewTemplate = template.Must(template.New("favorites").Funcs(viewFu
 				<span class="station-favicon">
 					{{if .Favicon}}<img src="{{.Favicon}}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">{{else}}&#128276;{{end}}
 				</span>
-				<span class="station-name">{{.Name}}</span>
+				<span class="station-name">{{if .URLResolved}}<a href="{{.URLResolved}}" target="_blank" rel="noopener noreferrer" title="{{.URLResolved}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</span>
 				<span class="station-star" title="Favorited">&#11088;</span>
 			</td>
 			<td>{{if .CountryCode}}{{.CountryCode}}{{else}}&mdash;{{end}}</td>

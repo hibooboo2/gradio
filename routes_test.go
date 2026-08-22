@@ -249,11 +249,12 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	fragBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	resp.Body.Close()
-frag := string(fragBytes)
+	frag := string(fragBytes)
 	require.Contains(t, frag, "data-player-queue")
 	require.Contains(t, frag, "Global Shuffle")
-	require.Contains(t, frag, "data-player-song")
-	require.Contains(t, frag, "data-player-commercial")
+	require.Contains(t, frag, "data-classification-select")
+	require.Contains(t, frag, "data-player-merge-prev")
+	require.Contains(t, frag, "data-player-merge-next")
 	resp.Body.Close()
 }
 
