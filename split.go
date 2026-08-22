@@ -164,15 +164,6 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return err
 	}
-	if id == 0 {
-		// The recording already exists from a previous run; reuse its id so
-		// any new splits link to the original row instead of an orphan.
-		existing, err := fetchRecordingByPath(fname)
-		if err != nil {
-			return fmt.Errorf("fetch existing recording %s: %w", fname, err)
-		}
-		id = existing.ID
-	}
 	rec := Recording{
 		ID:         id,
 		SourcePath: fname,
@@ -202,6 +193,26 @@ func SplitStream(ctx context.Context, fname string) error {
 // output file, its cutoffs, and its position in the original stream, in the
 // splits table.
 func splitRecording(ctx context.Context, rec Recording) error {
+	wd, _ := os.Getwd()
+	if !filepath.IsAbs(rec.SourcePath) {
+		rec.SourcePath = filepath.Join(wd, rec.SourcePath)
+	}
+
+	// If this recording was fully split in a previous run and its output
+	// folder is still on disk, skip the expensive silence-detection pass
+	// entirely. The recording_splits row is written only after every split
+	// file has been created and stored, so its presence means the splits table
+	// is complete.
+	if folder, done, err := recordingSplitFolder(rec.ID); err != nil {
+		return fmt.Errorf("check recording split: %w", err)
+	} else if done {
+		if _, err := os.Stat(folder); err == nil {
+			slog.InfoContext(ctx, "recording already split, skipping silence detection", "recording", rec.ID, "folder", folder)
+			return nil
+		}
+		slog.InfoContext(ctx, "recording split folder missing, re-splitting", "recording", rec.ID, "folder", folder)
+	}
+
 	existing, err := fetchSplitsForRecording(rec.ID)
 	if err != nil {
 		return fmt.Errorf("fetch existing splits for recording %d: %w", rec.ID, err)
@@ -212,9 +223,6 @@ func splitRecording(ctx context.Context, rec Recording) error {
 	}
 
 	i := 0
-
-	wd, _ := os.Getwd()
-	rec.SourcePath = filepath.Join(wd, rec.SourcePath)
 
 	silences, err := detectSilence(ctx, rec.SourcePath)
 	if err != nil {
@@ -289,7 +297,11 @@ func splitRecording(ctx context.Context, rec Recording) error {
 		})
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return markRecordingSplit(rec.ID, splitOutputDir(rec.Radio, rec.SourcePath))
 }
 
 // nextSplitPositions returns n positions not yet used by any split of a
@@ -604,11 +616,16 @@ func classifySplit(start, end float64) string {
 	return classificationLikelySong
 }
 
+// splitOutputDir returns the directory a source recording's split output files
+// are written to: one folder per source file, nested under its radio.
+func splitOutputDir(radio, inputPath string) string {
+	return filepath.Join("split_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
+}
+
 // splitOutputPath returns the deterministic path a split's output file will
 // be written to for a given source recording and stream position.
 func splitOutputPath(radio, inputPath string, index int) string {
-	outputDir := filepath.Join("split_music", radio, strings.Split(filepath.Base(inputPath), ".")[0])
-	return filepath.Join(outputDir, fmt.Sprintf("output_%05d.mp3", index))
+	return filepath.Join(splitOutputDir(radio, inputPath), fmt.Sprintf("output_%05d.mp3", index))
 }
 
 func writeSegment(ctx context.Context, radio string, inputPath string, start, end float64, index int) (string, error) {

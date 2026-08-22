@@ -32,11 +32,11 @@ const (
 	PlayRadio  = "Slotex"
 )
 
-var urls = map[string]string{
-	"GayPHXRadio": streamURL,
-	"RandomRadio": streamURL2,
-	"Slotex":      "https://s3.slotex.pl:7076/;",
-}
+// urls maps a station name to its stream url. It is populated from the
+// radio_stations table (synced from radio-browser.info) in main after the DB
+// handle exists; radioURLs falls back to the built-in defaults when the table
+// is empty.
+var urls map[string]string
 
 var speakerOnce sync.Once
 
@@ -57,14 +57,39 @@ func main() {
 	watch := flag.Bool("watch", false, "watch files for splitts")
 	file := flag.String("f", "", "file to auto split")
 	addr := flag.String("http", "", "http listen address for the management API")
+	syncRadio := flag.Bool("sync", false, "force a full resync of the radio stations from radio-browser.info")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	defer cancel()
 
-	if *file != "" {
-		err := SplitStream(ctx, *file)
+	if *syncRadio {
+		n, err := syncRadioStations(ctx)
 		if err != nil {
+			slog.ErrorContext(ctx, "sync radio stations", "err", err)
+		} else {
+			slog.InfoContext(ctx, "synced radio stations", "count", n)
+		}
+	}
+
+	// Populate the recording urls from the radio_stations table. When the
+	// table is empty on first run, load the stations from initstations.json so
+	// all stations are available; otherwise the last sync is reused.
+	stations, err := fetchRadioStations()
+	if err != nil {
+		slog.ErrorContext(ctx, "load radio stations", "err", err)
+	} else if len(stations) == 0 {
+		n, err := syncRadioStations(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "sync radio stations", "err", err)
+		} else {
+			slog.InfoContext(ctx, "synced radio stations", "count", n)
+		}
+	}
+	urls = radioURLs()
+
+	if *file != "" {
+		if err := SplitStream(ctx, *file); err != nil {
 			slog.ErrorContext(ctx, "Split stream failed", "err", err)
 		}
 		return
@@ -136,7 +161,7 @@ func main() {
 		})
 	}
 
-	err := wg.Wait()
+	err = wg.Wait()
 	if err != nil {
 		slog.ErrorContext(ctx, "Group done", "err", err)
 	}

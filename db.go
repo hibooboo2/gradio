@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -75,6 +77,34 @@ func (s Split) Duration() float64 {
 	return s.End - s.Start
 }
 
+// contentID returns a stable positive 64-bit id derived from a SHA-256 hash of
+// the given string parts. Content-derived ids are deterministic, so a source
+// file (or a generated split) keeps the same id across re-processing runs
+// instead of receiving a fresh unique_rowid each time.
+func contentID(parts ...string) int64 {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return int64(binary.LittleEndian.Uint64(sum[:8]) & 0x7fffffffffffffff)
+}
+
+// recordingID derives a recording's primary key from its source file name and
+// size. The same file maps to the same row every time it is seen; a re-recorded
+// file with a different size becomes a distinct recording.
+func recordingID(sourcePath string, sizeBytes int64) int64 {
+	return contentID(sourcePath, strconv.FormatInt(sizeBytes, 10))
+}
+
+// splitID derives a split's primary key from its source file name and the
+// split's boundaries in that stream. The start and end keep two splits of the
+// same recording distinct while staying deterministic across re-runs.
+func splitID(sourcePath string, start, end float64) int64 {
+	return contentID(sourcePath, strconv.FormatFloat(start, 'f', -1, 64), strconv.FormatFloat(end, 'f', -1, 64))
+}
+
 func CreateDBHandle() *sql.DB {
 	recordDBOnce.Do(func() {
 		dsn := recordDBPath
@@ -111,7 +141,7 @@ func CreateDBHandle() *sql.DB {
 func createSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS recordings (
-			id          INT PRIMARY KEY DEFAULT unique_rowid(),
+			id          INT PRIMARY KEY,
 			source_path STRING NOT NULL,
 			radio       STRING NOT NULL,
 			recorded_at STRING NOT NULL,
@@ -120,7 +150,7 @@ func createSchema(db *sql.DB) error {
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 		CREATE TABLE IF NOT EXISTS splits (
-			id            INT PRIMARY KEY DEFAULT unique_rowid(),
+			id            INT PRIMARY KEY,
 			recording_id  INT    NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
 			source_path   STRING NOT NULL,
 			position      INT    NOT NULL,
@@ -132,6 +162,12 @@ func createSchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 		CREATE INDEX IF NOT EXISTS idx_splits_recording ON splits(recording_id);
+
+		CREATE TABLE IF NOT EXISTS recording_splits (
+			recording_id INT PRIMARY KEY REFERENCES recordings(id) ON DELETE CASCADE,
+			split_folder STRING NOT NULL,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 
 		CREATE TABLE IF NOT EXISTS playlists (
 			id         INT PRIMARY KEY DEFAULT unique_rowid(),
@@ -162,34 +198,50 @@ func createSchema(db *sql.DB) error {
 			password   STRING NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+
+		CREATE TABLE IF NOT EXISTS radio_stations (
+			stationuuid    STRING PRIMARY KEY,
+			name           STRING NOT NULL,
+			url_resolved   STRING NOT NULL,
+			favicon        STRING NOT NULL DEFAULT '',
+			tags           STRING NOT NULL DEFAULT '',
+			countrycode    STRING NOT NULL DEFAULT '',
+			languagecodes  STRING NOT NULL DEFAULT '',
+			created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	return err
 }
 
 // insertRecording records that a source file was produced and saved by the
-// recorder. It returns the recording id, or 0 if the file was already present
-// (same source path) so rotating/restarting does not create duplicates.
+// recorder. The id is a hash of the source path and file size, so re-seeing the
+// same file returns the same id instead of creating a duplicate row. A file
+// that was re-recorded with a different size is a distinct recording.
 func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes int64) (int64, error) {
 	if recordDB == nil {
 		return 0, fmt.Errorf("nil db")
 	}
 
+	id := recordingID(sourcePath, sizeBytes)
+
 	var existing int64
-	err := recordDB.QueryRow(`SELECT id FROM recordings WHERE source_path = $1`, sourcePath).Scan(&existing)
+	err := recordDB.QueryRow(
+		`SELECT id FROM recordings WHERE source_path = $1 AND size_bytes = $2`,
+		sourcePath, sizeBytes,
+	).Scan(&existing)
 	switch {
 	case err == nil:
-		return 0, nil
+		return existing, nil
 	case err != sql.ErrNoRows:
 		return 0, err
 	}
 
-	var id int64
-	err = recordDB.QueryRow(
-		`INSERT INTO recordings (source_path, radio, recorded_at, size_bytes)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING id`,
-		sourcePath, radio, recordedAt.UTC().Format(time.RFC3339), sizeBytes,
-	).Scan(&id)
+	_, err = recordDB.Exec(
+		`INSERT INTO recordings (id, source_path, radio, recorded_at, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (id) DO NOTHING`,
+		id, sourcePath, radio, recordedAt.UTC().Format(time.RFC3339), sizeBytes,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -242,16 +294,61 @@ func setRecordingStatus(id int64, status RecordingStatus) error {
 	return err
 }
 
-// insertSplit stores one output file produced by splitting a source recording.
-func insertSplit(s Split) error {
+// markRecordingSplit records that a source recording has been fully split and
+// where its output files were written. It is idempotent: re-running on the same
+// recording just refreshes the stored folder.
+func markRecordingSplit(recordingID int64, splitFolder string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
 	_, err := recordDB.Exec(
-		`INSERT INTO splits (recording_id, source_path, position, start_seconds, end_seconds, output_path, classification)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath, s.Classification,
+		`INSERT INTO recording_splits (recording_id, split_folder) VALUES ($1, $2)
+		 ON CONFLICT (recording_id) DO UPDATE SET split_folder = excluded.split_folder`,
+		recordingID, splitFolder,
+	)
+	return err
+}
+
+// recordingSplitFolder returns the folder a recording's splits were written
+// to, and whether the recording has been split (done). done is false when the
+// recording has no row in the recording_splits table.
+func recordingSplitFolder(recordingID int64) (folder string, done bool, err error) {
+	if recordDB == nil {
+		return "", false, fmt.Errorf("nil db")
+	}
+
+	err = recordDB.QueryRow(
+		`SELECT split_folder FROM recording_splits WHERE recording_id = $1`,
+		recordingID,
+	).Scan(&folder)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return folder, true, nil
+}
+
+// insertSplit stores one output file produced by splitting a source recording.
+// The id is a hash of the source file name and the split's boundaries (start
+// and end in the source stream), so re-processing the same recording produces
+// the same split ids.
+func insertSplit(s Split) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	if s.ID == 0 {
+		s.ID = splitID(s.SourcePath, s.Start, s.End)
+	}
+
+	_, err := recordDB.Exec(
+		`INSERT INTO splits (id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (id) DO NOTHING`,
+		s.ID, s.RecordingID, s.SourcePath, s.Index, s.Start, s.End, s.OutputPath, s.Classification,
 	)
 	return err
 }
@@ -298,7 +395,7 @@ func fetchAllSplits() ([]Split, error) {
 	rows, err := recordDB.Query(
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification
 		 FROM splits s
-		 ORDER BY s.id DESC`,
+		 ORDER BY s.created_at DESC, s.id`,
 	)
 	if err != nil {
 		return nil, err
@@ -385,7 +482,7 @@ func fetchAllRecordings() ([]Recording, error) {
 	rows, err := recordDB.Query(
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
-		 ORDER BY id DESC`,
+		 ORDER BY created_at DESC, id`,
 	)
 	if err != nil {
 		return nil, err
@@ -638,4 +735,99 @@ func createUser(name, password string) error {
 // stored bcrypt hash for the user.
 func userPasswordMatches(u User, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) == nil
+}
+
+// RadioStation is one row in the radio_stations table: a stream resolvable on
+// the internet with identifying metadata pulled from radio-browser.info.
+type RadioStation struct {
+	StationUUID   string
+	Name          string
+	URLResolved   string
+	Favicon       string
+	Tags          string
+	CountryCode   string
+	LanguageCodes string
+}
+
+// upsertRadioStations inserts or refreshes the given radio stations in bulk.
+// The stationuuid is the primary key, so re-syncing the same station replaces
+// its metadata instead of creating a duplicate row.
+func upsertRadioStations(stations []RadioStation) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+	if len(stations) == 0 {
+		return nil
+	}
+
+	// Build one multi-row statement so the whole batch is applied in a single
+	// round trip. CockroachDB handles this fine and it is much faster than
+	// inserting stations one at a time for a full 50k-station sync.
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO radio_stations (stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes) VALUES `)
+	args := make([]any, 0, len(stations)*7)
+	for i, s := range stations {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d)", i*7+1, i*7+2, i*7+3, i*7+4, i*7+5, i*7+6, i*7+7)
+		args = append(args, s.StationUUID, s.Name, s.URLResolved, s.Favicon, s.Tags, s.CountryCode, s.LanguageCodes)
+	}
+	sb.WriteString(` ON CONFLICT (stationuuid) DO UPDATE SET
+		name = excluded.name,
+		url_resolved = excluded.url_resolved,
+		favicon = excluded.favicon,
+		tags = excluded.tags,
+		countrycode = excluded.countrycode,
+		languagecodes = excluded.languagecodes`)
+
+	_, err := recordDB.Exec(sb.String(), args...)
+	return err
+}
+
+// fetchRadioStations returns every station in the radio_stations table.
+func fetchRadioStations() ([]RadioStation, error) {
+	if recordDB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := recordDB.Query(
+		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
+		 FROM radio_stations
+		 LIMIT 100
+		 `,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stations []RadioStation
+	for rows.Next() {
+		var s RadioStation
+		if err := rows.Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes); err != nil {
+			return nil, err
+		}
+		stations = append(stations, s)
+	}
+
+	return stations, rows.Err()
+}
+
+// fetchRadioStationURLs returns every station url_resolved keyed by its name,
+// so recording can pick a station by name.
+func fetchRadioStationURLs() (map[string]string, error) {
+	stations, err := fetchRadioStations()
+	if err != nil {
+		return nil, err
+	}
+
+	urls := make(map[string]string, len(stations))
+	for _, s := range stations {
+		if s.URLResolved == "" {
+			continue
+		}
+		urls[s.Name] = s.URLResolved
+	}
+	return urls, nil
 }

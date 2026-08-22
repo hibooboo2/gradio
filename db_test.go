@@ -12,6 +12,24 @@ import (
 
 const testDBPath = "postgres://root@localhost:26257/gradio_test?sslmode=disable"
 
+func TestContentIDs(t *testing.T) {
+	// Recording ids are a deterministic, positive hash of path + size.
+	r1 := recordingID("/radio/file.mp3", 100)
+	r2 := recordingID("/radio/file.mp3", 100)
+	require.Equal(t, r1, r2)
+	require.Positive(t, r1)
+	require.NotEqual(t, r1, recordingID("/radio/file.mp3", 200))
+	require.NotEqual(t, r1, recordingID("/radio/other.mp3", 100))
+
+	// Split ids are a deterministic hash of path + start/end boundaries.
+	s1 := splitID("/radio/file.mp3", 10.5, 30.25)
+	s2 := splitID("/radio/file.mp3", 10.5, 30.25)
+	require.Equal(t, s1, s2)
+	require.Positive(t, s1)
+	require.NotEqual(t, s1, splitID("/radio/file.mp3", 10.5, 30.26))
+	require.NotEqual(t, s1, splitID("/radio/other.mp3", 10.5, 30.25))
+}
+
 func TestRecordingDBLifecycle(t *testing.T) {
 	// Ensure the dedicated test database exists (connect to the default db to
 	// create it, since CockroachDB won't create it implicitly).
@@ -26,7 +44,7 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	// Recreate the schema on the freshly-dropped tables.
 	require.NoError(t, createSchema(recordDB))
@@ -38,11 +56,19 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	id, err := insertRecording(sourcePath, radio, recordedAt, 12345)
 	require.NoError(t, err)
 	require.NotZero(t, id)
+	require.Equal(t, recordingID(sourcePath, 12345), id, "id is a hash of the source path and size")
 
-	// Inserting the same source again should not create a duplicate row.
-	id2, err := insertRecording(sourcePath, radio, recordedAt, 99999)
+	// Re-inserting the same file (same path and size) returns the same id
+	// instead of creating a duplicate row.
+	id2, err := insertRecording(sourcePath, radio, recordedAt, 12345)
 	require.NoError(t, err)
-	require.Zero(t, id2)
+	require.Equal(t, id, id2)
+
+	// A re-recorded file with a different size is a distinct recording.
+	id3, err := insertRecording(sourcePath, radio, recordedAt, 99999)
+	require.NoError(t, err)
+	require.NotEqual(t, id, id3)
+	require.Equal(t, recordingID(sourcePath, 99999), id3)
 
 	pending, err := fetchPendingRecordings()
 	require.NoError(t, err)
@@ -121,7 +147,7 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 
@@ -206,4 +232,49 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	for _, s := range batch {
 		require.NotEqual(t, splitIDs[0], s.ID, "most-played split should sort last")
 	}
+}
+
+// TestRadioStationDB covers the radio_stations table: bulk upsert, idempotent
+// re-sync, and the name -> url_resolved lookup map.
+func TestRadioStationDB(t *testing.T) {
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS radio_stations;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	// Upsert a batch of stations.
+	require.NoError(t, upsertRadioStations([]RadioStation{
+		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
+		{StationUUID: "uuid-2", Name: "Beta", URLResolved: "https://b.example/stream", Tags: "classical", CountryCode: "DE", LanguageCodes: "ger"},
+		{StationUUID: "uuid-3", Name: "Gamma", URLResolved: "", CountryCode: "FR"}, // no resolved url: kept but excluded from map
+	}))
+
+	// Re-syncing the same uuid updates metadata in place.
+	require.NoError(t, upsertRadioStations([]RadioStation{
+		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream", Favicon: "https://a.example/new-icon.png", Tags: "jazz,pop,rock", CountryCode: "US", LanguageCodes: "eng"},
+	}))
+
+	stations, err := fetchRadioStations()
+	require.NoError(t, err)
+	require.Len(t, stations, 3, "upsert must not create duplicate rows")
+
+	urls, err := fetchRadioStationURLs()
+	require.NoError(t, err)
+	require.Equal(t, "https://a.example/stream", urls["Alpha"])
+	require.Equal(t, "https://b.example/stream", urls["Beta"])
+	require.NotContains(t, urls, "Gamma", "stations without url_resolved are not recordable")
+	require.Len(t, urls, 2)
+
+	// An empty table makes radioURLs fall back to the built-in defaults.
+	_, err = recordDB.Exec(`DELETE FROM radio_stations;`)
+	require.NoError(t, err)
+	require.Equal(t, defaultURLs(), radioURLs())
 }

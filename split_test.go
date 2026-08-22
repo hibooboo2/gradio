@@ -14,13 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSplitStreamSkipsExisting(t *testing.T) {
+// buildSilenceFixture renders a short mp3 with three audible segments separated
+// by silences, so silence detection (noise=-17.8dB, d=1.3) splits it into
+// multiple files. The sine source alone peaks at ~-18dB (below the -17.8dB
+// silence threshold), so it must be boosted to read as audible.
+func buildSilenceFixture(t *testing.T, name string) string {
+	t.Helper()
 	dir := t.TempDir()
-	fixture := filepath.Join(dir, "fixture.mp3")
-	// Build a 75s source: 3x (15s tone + 10s silence). Silence detection
-	// (noise=-17.8dB, d=1.3) splits at each silent gap, so multiple splits.
-	// The sine source alone peaks at ~-18dB (below the -17.8dB silence
-	// threshold), so it must be boosted to read as audible.
+	fixture := filepath.Join(dir, name)
 	inputs := []string{"-f", "lavfi", "-i", "sine=frequency=440:duration=15", "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=44100"}
 	segParts := make([]string, 0, 6)
 	for i := 0; i < 3; i++ {
@@ -39,6 +40,11 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 		"-filter_complex", filter, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "128k", fixture)
 	cmd := exec.Command("ffmpeg", args...)
 	require.NoError(t, cmd.Run())
+	return fixture
+}
+
+func TestSplitStreamSkipsExisting(t *testing.T) {
+	fixture := buildSilenceFixture(t, "fixture.mp3")
 
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
@@ -49,7 +55,7 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 
@@ -64,6 +70,13 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, splits1)
 
+	// The recording is tracked as split with the folder its outputs live in.
+	folder, done, err := recordingSplitFolder(rec.ID)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.DirExists(t, folder)
+	require.Equal(t, filepath.Dir(splits1[0].OutputPath), folder)
+
 	mtimes := make(map[string]time.Time, len(splits1))
 	for _, s := range splits1 {
 		require.Equal(t, classifySplit(s.Start, s.End), s.Classification, "split %d classification", s.Index)
@@ -73,12 +86,19 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 	}
 
 	// Second run: reprocess the same file. Existing outputs must be skipped,
-	// not re-encoded, and no duplicate split rows may be created.
+	// not re-encoded, and no duplicate split rows may be created. Because the
+	// recording is tracked as split and its folder still exists, silence
+	// detection is skipped entirely.
 	require.NoError(t, SplitStream(t.Context(), fixture))
 
 	splits2, err := fetchSplitsForRecording(rec.ID)
 	require.NoError(t, err)
 	require.Len(t, splits2, len(splits1))
+
+	folder2, done2, err := recordingSplitFolder(rec.ID)
+	require.NoError(t, err)
+	require.True(t, done2)
+	require.Equal(t, folder, folder2)
 
 	for _, s := range splits2 {
 		prev, ok := mtimes[s.OutputPath]
@@ -86,6 +106,55 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 		info, err := os.Stat(s.OutputPath)
 		require.NoError(t, err)
 		require.Equal(t, prev, info.ModTime(), "output file was re-split: %s", s.OutputPath)
+	}
+}
+
+func TestSplitRecordingRerunsWhenFolderMissing(t *testing.T) {
+	fixture := buildSilenceFixture(t, "rerun.mp3")
+
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	setRecordDBPath(testDBPath)
+	CreateDBHandle()
+
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(recordDB))
+
+	require.NoError(t, SplitStream(t.Context(), fixture))
+
+	rec, err := fetchRecordingByPath(fixture)
+	require.NoError(t, err)
+	require.NotZero(t, rec.ID)
+
+	folder, done, err := recordingSplitFolder(rec.ID)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.DirExists(t, folder)
+
+	// Removing the output folder means the recording is no longer considered
+	// split; silence detection must run again and repopulate the folder.
+	require.NoError(t, os.RemoveAll(folder))
+	require.NoDirExists(t, folder)
+
+	require.NoError(t, SplitStream(t.Context(), fixture))
+	require.DirExists(t, folder)
+
+	folder2, done2, err := recordingSplitFolder(rec.ID)
+	require.NoError(t, err)
+	require.True(t, done2)
+	require.Equal(t, folder, folder2)
+
+	// Splits are still complete after the re-run.
+	splits, err := fetchSplitsForRecording(rec.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, splits)
+	for _, s := range splits {
+		require.FileExists(t, s.OutputPath)
 	}
 }
 
@@ -114,7 +183,7 @@ func TestResplitSplit(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 
@@ -227,7 +296,7 @@ func TestMergeSplit(t *testing.T) {
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, createSchema(recordDB))
 

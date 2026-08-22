@@ -11,7 +11,6 @@ docker-db:
 		docker run -d \
 			--name $(COCKROACH_CONTAINER) \
 			-p $(COCKROACH_PORT):26257 \
-			-p 8080:8080 \
 			-v $(COCKROACH_VOLUME):/cockroach/cockroach-data \
 			$(COCKROACH_IMAGE) \
 			start-single-node \
@@ -32,7 +31,7 @@ docker-db:
 
 run: docker-db
 	go build -o gradio
-	./gradio
+	./gradio -http 8000 -watch
 
 build:
 	GOOS=windows go build -o gradio
