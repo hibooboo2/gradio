@@ -283,7 +283,7 @@ type Recorder struct {
 	url       string
 	radioName string
 	buffer    *bytes.Buffer
-	fullName  string
+	filename  string
 	started   time.Time
 	cancel    context.CancelFunc
 }
@@ -327,7 +327,7 @@ func (r *Recorder) Run(ctx context.Context) {
 				slog.InfoContext(ctx, "Context is done")
 				return
 			default:
-				slog.InfoContext(ctx, "Record once finished", "radioName", r.fullName)
+				slog.InfoContext(ctx, "Record once finished", "radioName", r.filename)
 				continue
 			}
 		}
@@ -467,18 +467,18 @@ func (r *Recorder) storeToDisk() bool {
 			slog.Info("Not storing recording from buffer", "size", r.buffer.Len())
 			return false
 		}
-		err := os.WriteFile(r.fullName, r.buffer.Bytes(), 0644)
+		err := os.WriteFile(r.filename, r.buffer.Bytes(), 0644)
 		if err != nil {
-			slog.Error("Failed to write file", "file", r.fullName)
+			slog.Error("Failed to write file", "file", r.filename)
 			return false
 		}
 
-		info, err := os.Stat(r.fullName)
+		info, err := os.Stat(r.filename)
 		if err != nil {
-			slog.Error("stat closed recording ", "fileName", r.fullName, "err", err)
+			slog.Error("stat closed recording ", "fileName", r.filename, "err", err)
 		} else {
-			slog.Info("Recording to db", "name", r.fullName, "size", info.Size())
-			r.recordFileToDB(r.fullName, r.started, info.Size())
+			slog.Info("Recording to db", "name", r.filename, "size", info.Size())
+			r.recordFileToDB(r.filename, r.started, info.Size())
 			return true
 		}
 	}
@@ -510,7 +510,7 @@ func (r *Recorder) rotate(ctx context.Context) error {
 
 	r.buffer = &bytes.Buffer{}
 	r.started = now
-	r.fullName = filename
+	r.filename = filename
 
 	return nil
 }
@@ -522,7 +522,7 @@ func (r *Recorder) Close() {
 	r.storeToDisk()
 
 	r.buffer = nil
-	r.fullName = ""
+	r.filename = ""
 }
 
 // watchAndSplit periodically polls the recordings table for files that were

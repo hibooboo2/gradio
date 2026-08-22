@@ -698,6 +698,29 @@
 			object-fit: cover;
 		}
 		.station-name { font-weight: 600; }
+		.station-name-btn {
+			background: transparent;
+			color: var(--accent);
+			border: none;
+			border-radius: 6px;
+			padding: 0.15rem 0.5rem;
+			margin: -0.15rem 0;
+			font-size: inherit;
+			font-weight: 600;
+			line-height: 1.4;
+			cursor: pointer;
+			text-align: left;
+			transition: background 0.15s ease, color 0.15s ease;
+		}
+		.station-name-btn:hover {
+			background: rgba(99, 102, 241, 0.15);
+			color: #a5b4fc;
+			filter: none;
+		}
+		.station-name-btn:focus-visible {
+			outline: 2px solid var(--accent);
+			outline-offset: 2px;
+		}
 		.station-star { margin-left: 0.35rem; font-size: 1rem; }
 		.station-fav {
 			background: transparent;
