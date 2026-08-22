@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -23,7 +22,6 @@ const defaultDBPath = "postgres://root@localhost:26257/defaultdb?sslmode=disable
 
 var (
 	recordDB     *sql.DB
-	recordDBOnce sync.Once
 	recordDBPath = defaultDBPath
 )
 
@@ -106,33 +104,29 @@ func splitID(sourcePath string, start, end float64) int64 {
 }
 
 func CreateDBHandle() *sql.DB {
-	recordDBOnce.Do(func() {
-		dsn := recordDBPath
-		if env := os.Getenv("DATABASE_URL"); env != "" {
-			dsn = env
-		}
+	dsn := recordDBPath
+	if env := os.Getenv("DATABASE_URL"); env != "" {
+		dsn = env
+	}
 
-		db, err := sql.Open("pgx", dsn)
-		if err != nil {
-			log.Fatalf("recordings: open db: %v", err)
-			return
-		}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		log.Fatalf("recordings: open db: %v", err)
+		return nil
+	}
 
-		// CockroachDB handles concurrent writers fine, so unlike the old
-		// sqlite driver there is no need to serialize access to a single
-		// connection.
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(5)
+	// CockroachDB handles concurrent writers fine, so unlike the old
+	// sqlite driver there is no need to serialize access to a single
+	// connection.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 
-		recordDB = db
+	if err := createSchema(db); err != nil {
+		log.Fatalf("recordings: create tables: %v", err)
+		return nil
+	}
 
-		if err := createSchema(db); err != nil {
-			log.Fatalf("recordings: create tables: %v", err)
-			return
-		}
-	})
-
-	return recordDB
+	return db
 }
 
 // createSchema ensures the recordings and splits tables (and their indexes)
@@ -883,7 +877,7 @@ func removeFavorite(stationuuid string) error {
 }
 
 // fetchFavoriteUUIDs returns the set of station uuids that are favorited.
-func fetchFavoriteUUIDs() (map[string]bool, error) {
+func fetchFavoriteUUIDs() (map[string]struct{}, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -894,13 +888,13 @@ func fetchFavoriteUUIDs() (map[string]bool, error) {
 	}
 	defer rows.Close()
 
-	favs := map[string]bool{}
+	favs := map[string]struct{}{}
 	for rows.Next() {
 		var uuid string
 		if err := rows.Scan(&uuid); err != nil {
 			return nil, err
 		}
-		favs[uuid] = true
+		favs[uuid] = struct{}{}
 	}
 	return favs, rows.Err()
 }

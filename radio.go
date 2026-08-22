@@ -86,3 +86,9 @@ func defaultURLs() map[string]string {
 		"Slotex":      "https://s3.slotex.pl:7076/;",
 	}
 }
+
+const (
+	streamURL  = "https://radio.gayphx.com/listen/gayphx/radio.mp3"
+	streamURL2 = "https://maxfm.ice.infomaniak.ch/maxfm-945.mp3"
+	PlayRadio  = "Slotex"
+)

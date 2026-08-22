@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,18 +27,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	streamURL  = "https://radio.gayphx.com/listen/gayphx/radio.mp3"
-	streamURL2 = "https://maxfm.ice.infomaniak.ch/maxfm-945.mp3"
-	PlayRadio  = "Slotex"
-)
-
-// urls maps a station name to its stream url. It is populated from the
-// radio_stations table (synced from radio-browser.info) in main after the DB
-// handle exists; radioURLs falls back to the built-in defaults when the table
-// is empty.
-var urls map[string]string
-
 var speakerOnce sync.Once
 
 // sharedProgress renders one combined progress bar display shared by all radio
@@ -52,7 +41,6 @@ type recorderSet struct {
 	ctx       context.Context
 	g         *errgroup.Group
 	recorders map[string]*Recorder
-	cancel    map[string]context.CancelFunc
 }
 
 // NewRecorderSet creates a recorder set bound to ctx. Every recorder started
@@ -64,7 +52,6 @@ func NewRecorderSet(ctx context.Context) *recorderSet {
 		ctx:       gctx,
 		g:         g,
 		recorders: map[string]*Recorder{},
-		cancel:    map[string]context.CancelFunc{},
 	}
 }
 
@@ -77,19 +64,26 @@ func (rs *recorderSet) start(name, url string) bool {
 	if _, ok := rs.recorders[name]; ok {
 		return false
 	}
-	recCtx, cancel := context.WithCancel(rs.ctx)
-	rec := &Recorder{url: url, radioName: name}
+	ctx, cancel := context.WithCancel(rs.ctx)
+	rec := &Recorder{url: url, radioName: name, cancel: cancel}
 	rs.recorders[name] = rec
-	rs.cancel[name] = cancel
 	rs.g.Go(func() error {
-		rec.Run(recCtx)
-		rs.mu.Lock()
-		delete(rs.recorders, name)
-		delete(rs.cancel, name)
-		rs.mu.Unlock()
+		defer rs.deleteRecorder(name)
+		slog.InfoContext(ctx, "Starting recorder", "radio", name, "url", url)
+		rec.Run(ctx)
 		return nil
 	})
 	return true
+}
+
+func (rs *recorderSet) deleteRecorder(name string) {
+	rs.mu.Lock()
+	rec, ok := rs.recorders[name]
+	if ok && rec.cancel != nil {
+		rec.cancel()
+	}
+	delete(rs.recorders, name)
+	rs.mu.Unlock()
 }
 
 // wait blocks until every recorder started through the set has finished.
@@ -102,8 +96,11 @@ func (rs *recorderSet) wait() error {
 func (rs *recorderSet) stop(name string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if c, ok := rs.cancel[name]; ok {
-		c()
+	if r, ok := rs.recorders[name]; ok {
+		if r.cancel != nil {
+			r.cancel()
+			r.cancel = nil
+		}
 	}
 }
 
@@ -119,23 +116,22 @@ func (rs *recorderSet) register(name string, rec *Recorder) {
 // recorded again later.
 func (rs *recorderSet) unregister(name string) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	delete(rs.recorders, name)
-	delete(rs.cancel, name)
+	rs.mu.Unlock()
 }
 
 // isRecording reports whether the named station is currently being recorded.
 func (rs *recorderSet) isRecording(name string) bool {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	_, ok := rs.recorders[name]
+	rs.mu.Unlock()
 	return ok
 }
 
 func main() {
 	glog.Init()
 
-	CreateDBHandle()
+	recordDB = CreateDBHandle()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -230,18 +226,21 @@ func main() {
 		// update together. A goroutine keeps it waiting until every radio is
 		// done so it renders even after the main recorder goroutines return.
 		sharedProgress = mpb.New(mpb.WithWidth(60))
-		for name, url := range urls {
-			rec := &Recorder{
-				url:       url,
-				radioName: name,
-			}
-			recorderManager.register(name, rec)
+		stations, err := fetchRadioStationURLs()
+		if err == nil {
+			for name, url := range stations {
+				rec := &Recorder{
+					url:       url,
+					radioName: name,
+				}
+				recorderManager.register(name, rec)
 
-			wg.Go(func() error {
-				rec.Run(ctx)
-				recorderManager.unregister(name)
-				return nil
-			})
+				wg.Go(func() error {
+					rec.Run(ctx)
+					recorderManager.unregister(name)
+					return nil
+				})
+			}
 		}
 	}
 
@@ -274,6 +273,7 @@ type Recorder struct {
 	buffer    *bytes.Buffer
 	fullName  string
 	started   time.Time
+	cancel    context.CancelFunc
 }
 
 // recordFileToDB marks a just-saved recording file as available for splitting.
@@ -302,29 +302,32 @@ func (r *Recorder) Run(ctx context.Context) {
 		default:
 		}
 
-		if err := r.recordOnce(ctx, r.url, time.Minute*60); err != nil {
+		slog.InfoContext(ctx, "Starting recording", r.url)
+		if err := r.RecordOnce(ctx, time.Minute*60); err != nil {
 			if ctx.Err() != nil {
-				return
+				slog.ErrorContext(ctx, "Conext had an error", "err", ctx.Err())
+
 			}
 
-			log.Printf("recording error: %v", err)
+			slog.InfoContext(ctx, "recording failed", "err", err)
 
 			select {
 			case <-ctx.Done():
-
+				slog.InfoContext(ctx, "Context is done")
 				return
 			default:
+				slog.InfoContext(ctx, "Record once finished", "radioName", r.fullName)
 				continue
 			}
 		}
 	}
 }
 
-func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime time.Duration) error {
+func (r *Recorder) RecordOnce(ctx context.Context, rotateTime time.Duration) error {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		streamURL,
+		r.url,
 		nil,
 	)
 	if err != nil {
@@ -349,7 +352,7 @@ func (r *Recorder) recordOnce(ctx context.Context, streamURL string, rotateTime 
 		}
 
 		stored := r.storeToDisk()
-		slog.InfoContext(ctx, "Radio recording failed", "radioStation", r.radioName, "stored", stored)
+		slog.InfoContext(ctx, "Radio recording go routine finished", "radioStation", r.radioName, "stored", stored)
 	}()
 
 	buf := make([]byte, 64*1024)
@@ -584,10 +587,11 @@ func PlayStream(ctx context.Context) {
 }
 
 func playOnce(ctx context.Context) error {
+	stations, err := fetchRadioStations()
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		urls[PlayRadio],
+		stations[rand.IntN(len(stations))-1].URLResolved,
 		nil,
 	)
 	if err != nil {

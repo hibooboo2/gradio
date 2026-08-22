@@ -149,10 +149,11 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]stationViewRow, 0, len(stations))
 	for _, s := range stations {
+		_, faved := favs[s.StationUUID]
 		rows = append(rows, stationViewRow{
 			RadioStation: s,
 			Recording:    recorderManager.isRecording(s.Name),
-			Favorited:    favs[s.StationUUID],
+			Favorited:    faved,
 		})
 	}
 
@@ -208,7 +209,7 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if favs[uuid] {
+	if _, ok := favs[uuid]; ok {
 		err = removeFavorite(uuid)
 	} else {
 		err = addFavorite(uuid)
