@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+
+	"github.com/hibooboo2/gradio/db"
 )
 
 // initStationsPath is the local snapshot of the radio-browser "list of all
@@ -39,12 +41,12 @@ func syncRadioStations(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	stations := make([]RadioStation, 0, len(page))
+	stations := make([]db.RadioStation, 0, len(page))
 	for _, s := range page {
 		if s.URLResolved == "" {
 			continue
 		}
-		stations = append(stations, RadioStation{
+		stations = append(stations, db.RadioStation{
 			StationUUID:   s.StationUUID,
 			Name:          s.Name,
 			URLResolved:   s.URLResolved,
@@ -55,7 +57,7 @@ func syncRadioStations(ctx context.Context) (int, error) {
 		})
 	}
 
-	if err := upsertRadioStations(ctx, stations); err != nil {
+	if err := db.UpsertRadioStations(ctx, stations); err != nil {
 		return 0, fmt.Errorf("upsert radio stations: %w", err)
 	}
 
@@ -66,7 +68,7 @@ func syncRadioStations(ctx context.Context) (int, error) {
 // radio_stations table. It falls back to the built-in defaults when the table
 // has no stations yet.
 func radioURLs(ctx context.Context) map[string]string {
-	urls, err := fetchRadioStationURLs(ctx)
+	urls, err := db.FetchRadioStationURLs(ctx)
 	if err != nil {
 		slog.Error("load radio station urls", "err", err)
 		return defaultURLs()

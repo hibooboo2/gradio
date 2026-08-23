@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibooboo2/gradio/db"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -52,26 +53,26 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
 	// First run: fully split the file.
 	require.NoError(t, SplitStream(t.Context(), fixture))
 
-	rec, err := fetchRecordingByPath(t.Context(), fixture)
+	rec, err := db.FetchRecordingByPath(t.Context(), fixture)
 	require.NoError(t, err)
 	require.NotZero(t, rec.ID)
 
-	splits1, err := fetchSplitsForRecording(t.Context(), rec.ID)
+	splits1, err := db.FetchSplitsForRecording(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, splits1)
 
 	// The recording is tracked as split with the folder its outputs live in.
-	folder, done, err := recordingSplitFolder(t.Context(), rec.ID)
+	folder, done, err := db.RecordingSplitFolder(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.True(t, done)
 	require.DirExists(t, folder)
@@ -91,11 +92,11 @@ func TestSplitStreamSkipsExisting(t *testing.T) {
 	// detection is skipped entirely.
 	require.NoError(t, SplitStream(t.Context(), fixture))
 
-	splits2, err := fetchSplitsForRecording(t.Context(), rec.ID)
+	splits2, err := db.FetchSplitsForRecording(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.Len(t, splits2, len(splits1))
 
-	folder2, done2, err := recordingSplitFolder(t.Context(), rec.ID)
+	folder2, done2, err := db.RecordingSplitFolder(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.True(t, done2)
 	require.Equal(t, folder, folder2)
@@ -118,20 +119,20 @@ func TestSplitRecordingRerunsWhenFolderMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
 	require.NoError(t, SplitStream(t.Context(), fixture))
 
-	rec, err := fetchRecordingByPath(t.Context(), fixture)
+	rec, err := db.FetchRecordingByPath(t.Context(), fixture)
 	require.NoError(t, err)
 	require.NotZero(t, rec.ID)
 
-	folder, done, err := recordingSplitFolder(t.Context(), rec.ID)
+	folder, done, err := db.RecordingSplitFolder(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.True(t, done)
 	require.DirExists(t, folder)
@@ -144,13 +145,13 @@ func TestSplitRecordingRerunsWhenFolderMissing(t *testing.T) {
 	require.NoError(t, SplitStream(t.Context(), fixture))
 	require.DirExists(t, folder)
 
-	folder2, done2, err := recordingSplitFolder(t.Context(), rec.ID)
+	folder2, done2, err := db.RecordingSplitFolder(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.True(t, done2)
 	require.Equal(t, folder, folder2)
 
 	// Splits are still complete after the re-run.
-	splits, err := fetchSplitsForRecording(t.Context(), rec.ID)
+	splits, err := db.FetchSplitsForRecording(t.Context(), rec.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, splits)
 	for _, s := range splits {
@@ -159,10 +160,10 @@ func TestSplitRecordingRerunsWhenFolderMissing(t *testing.T) {
 }
 
 func TestClassifySplit(t *testing.T) {
-	require.Equal(t, classificationNotSong, classifySplit(0, 59.9))
-	require.Equal(t, classificationNotSong, classifySplit(10, 69))
-	require.Equal(t, classificationLikelySong, classifySplit(0, 60))
-	require.Equal(t, classificationLikelySong, classifySplit(100, 300))
+	require.Equal(t, db.ClassificationNotSong, classifySplit(0, 59.9))
+	require.Equal(t, db.ClassificationNotSong, classifySplit(10, 69))
+	require.Equal(t, db.ClassificationLikelySong, classifySplit(0, 60))
+	require.Equal(t, db.ClassificationLikelySong, classifySplit(100, 300))
 }
 
 func TestResplitSplit(t *testing.T) {
@@ -180,16 +181,16 @@ func TestResplitSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	orig := Split{
+	orig := db.Split{
 		RecordingID: recID,
 		SourcePath:  fixture,
 		Index:       0,
@@ -203,8 +204,8 @@ func TestResplitSplit(t *testing.T) {
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=40",
 		"-c:a", "libmp3lame", "-b:a", "128k", orig.OutputPath)
 	require.NoError(t, cmd.Run())
-	require.NoError(t, insertSplit(t.Context(), orig))
-	all, err := fetchSplitsForRecording(t.Context(), recID)
+	require.NoError(t, db.InsertSplit(t.Context(), orig))
+	all, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 	orig = all[0]
@@ -216,14 +217,14 @@ func TestResplitSplit(t *testing.T) {
 
 	original, a, b, err := resplitSplit(t.Context(), orig.ID, 20)
 	require.NoError(t, err)
-	require.Equal(t, classificationReSplit, original.Classification)
+	require.Equal(t, db.ClassificationReSplit, original.Classification)
 	require.InDelta(t, orig.Start, a.Start, 0.001)
 	require.InDelta(t, 20, a.End, 0.001)
 	require.InDelta(t, 20, b.Start, 0.001)
 	require.InDelta(t, orig.End, b.End, 0.001)
 
 	// Both new splits produced their own files from the original recording.
-	for _, s := range []Split{a, b} {
+	for _, s := range []db.Split{a, b} {
 		info, err := os.Stat(s.OutputPath)
 		require.NoError(t, err)
 		require.Positive(t, info.Size())
@@ -238,23 +239,23 @@ func TestResplitSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, origSize, afterInfo.Size())
 
-	fetched, err := fetchSplit(t.Context(), orig.ID)
+	fetched, err := db.FetchSplit(t.Context(), orig.ID)
 	require.NoError(t, err)
-	require.Equal(t, classificationReSplit, fetched.Classification)
+	require.Equal(t, db.ClassificationReSplit, fetched.Classification)
 
 	// The database now has three splits: the original plus the two new ones.
-	all, err = fetchSplitsForRecording(t.Context(), recID)
+	all, err = db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, all, 3)
 
 	// A cut outside one of the new (non re_split) splits is rejected without
 	// creating rows.
-	allSplits, err := fetchSplitsForRecording(t.Context(), recID)
+	allSplits, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, allSplits, 3)
 	var aID int64
 	for _, s := range allSplits {
-		if s.Classification != classificationReSplit {
+		if s.Classification != db.ClassificationReSplit {
 			aID = s.ID
 			break
 		}
@@ -262,7 +263,7 @@ func TestResplitSplit(t *testing.T) {
 	require.NotZero(t, aID)
 	_, _, _, err = resplitSplit(t.Context(), aID, -1)
 	require.ErrorIs(t, err, errCutOutsideSplit)
-	all, err = fetchSplitsForRecording(t.Context(), recID)
+	all, err = db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, all, 3)
 
@@ -271,10 +272,10 @@ func TestResplitSplit(t *testing.T) {
 	require.Error(t, err)
 
 	// re_split splits are excluded from the global shuffle.
-	batch, err := fetchGlobalShuffleBatch(t.Context(), 100, nil)
+	batch, err := db.FetchGlobalShuffleBatch(t.Context(), 100, nil)
 	require.NoError(t, err)
 	for _, s := range batch {
-		require.NotEqual(t, classificationReSplit, s.Classification)
+		require.NotEqual(t, db.ClassificationReSplit, s.Classification)
 	}
 }
 
@@ -293,25 +294,25 @@ func TestMergeSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
 
 	// Three adjacent splits spanning [0,20),[20,40),[40,60).
-	require.NoError(t, insertSplit(t.Context(), Split{RecordingID: recID, SourcePath: fixture, Index: 0, Start: 0, End: 20, OutputPath: filepath.Join(dir, "a.mp3")}))
-	require.NoError(t, insertSplit(t.Context(), Split{RecordingID: recID, SourcePath: fixture, Index: 1, Start: 20, End: 40, OutputPath: filepath.Join(dir, "b.mp3")}))
-	require.NoError(t, insertSplit(t.Context(), Split{RecordingID: recID, SourcePath: fixture, Index: 2, Start: 40, End: 60, OutputPath: filepath.Join(dir, "c.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 0, Start: 0, End: 20, OutputPath: filepath.Join(dir, "a.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 1, Start: 20, End: 40, OutputPath: filepath.Join(dir, "b.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 2, Start: 40, End: 60, OutputPath: filepath.Join(dir, "c.mp3")}))
 
-	splits, err := fetchSplitsForRecording(t.Context(), recID)
+	splits, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 3)
-	var middle Split
+	var middle db.Split
 	for _, s := range splits {
 		if s.Index == 1 {
 			middle = s
@@ -339,13 +340,13 @@ func TestMergeSplit(t *testing.T) {
 
 	// Both source splits are now re_split.
 	for _, id := range []int64{cur.ID, adj.ID} {
-		f, err := fetchSplit(t.Context(), id)
+		f, err := db.FetchSplit(t.Context(), id)
 		require.NoError(t, err)
-		require.Equal(t, classificationReSplit, f.Classification)
+		require.Equal(t, db.ClassificationReSplit, f.Classification)
 	}
 
 	// DB now has 4 splits total (3 originals + 1 merged).
-	all, err := fetchSplitsForRecording(t.Context(), recID)
+	all, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, all, 4)
 
@@ -353,7 +354,7 @@ func TestMergeSplit(t *testing.T) {
 	// before it to join on; merging with the previous neighbor errors.
 	var mergedID int64
 	for _, s := range all {
-		if s.Classification != classificationReSplit {
+		if s.Classification != db.ClassificationReSplit {
 			mergedID = s.ID
 			break
 		}

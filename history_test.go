@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibooboo2/gradio/db"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
 
-// TestPlayHistory covers the play_history table: every recordPlay appends a
+// TestPlayHistory covers the play_history table: every db.RecordPlay appends a
 // row, and the recency/frequency/grouped fetch helpers aggregate it correctly.
 func TestPlayHistory(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
@@ -23,19 +24,19 @@ func TestPlayHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), "/tmp/history.mp3", "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), "/tmp/history.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
 
 	splitIDs := make([]int64, 0, 2)
 	for i := 0; i < 2; i++ {
-		require.NoError(t, insertSplit(t.Context(), Split{
+		require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 			RecordingID: recID,
 			SourcePath:  "/tmp/history.mp3",
 			Index:       i,
@@ -43,23 +44,23 @@ func TestPlayHistory(t *testing.T) {
 			End:         float64(i*100 + 100),
 			OutputPath:  "split_music/TestRadio/history/output_0000" + strconv.Itoa(i) + ".mp3",
 		}))
-		splits, err := fetchSplitsForRecording(t.Context(), recID)
+		splits, err := db.FetchSplitsForRecording(t.Context(), recID)
 		require.NoError(t, err)
 		splitIDs = append(splitIDs, splits[len(splits)-1].ID)
 	}
 	require.Len(t, splitIDs, 2)
 
-	// recordPlay appends a history row on every play, not just the first.
-	require.NoError(t, recordPlay(t.Context(), splitIDs[0]))
-	require.NoError(t, recordPlay(t.Context(), splitIDs[0]))
-	require.NoError(t, recordPlay(t.Context(), splitIDs[1]))
+	// db.RecordPlay appends a history row on every play, not just the first.
+	require.NoError(t, db.RecordPlay(t.Context(), splitIDs[0]))
+	require.NoError(t, db.RecordPlay(t.Context(), splitIDs[0]))
+	require.NoError(t, db.RecordPlay(t.Context(), splitIDs[1]))
 
 	var count int
-	require.NoError(t, recordDB.QueryRowContext(t.Context(), `SELECT count(*) FROM play_history`).Scan(&count))
+	require.NoError(t, db.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM play_history`).Scan(&count))
 	require.Equal(t, 3, count)
 
 	// Recency: both songs, most recently played first (splitIDs[1] was last).
-	recency, err := fetchPlayHistoryRecency(t.Context(), 10)
+	recency, err := db.FetchPlayHistoryRecency(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, recency, 2)
 	require.Equal(t, splitIDs[1], recency[0].Split.ID)
@@ -71,14 +72,14 @@ func TestPlayHistory(t *testing.T) {
 	require.False(t, recency[0].FirstPlayed.IsZero())
 
 	// Frequency: most played first.
-	freq, err := fetchPlayHistoryFrequency(t.Context(), 10)
+	freq, err := db.FetchPlayHistoryFrequency(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, freq, 2)
 	require.Equal(t, splitIDs[0], freq[0].Split.ID)
 	require.Equal(t, 2, freq[0].Plays)
 
 	// Grouped by radio: one group with both songs.
-	groups, err := fetchPlayHistoryGrouped(t.Context(), 10)
+	groups, err := db.FetchPlayHistoryGrouped(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, groups, 1)
 	require.Equal(t, "TestRadio", groups[0].Radio)
@@ -94,21 +95,21 @@ func TestHistoryEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), "/tmp/history-endpoints.mp3", "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), "/tmp/history-endpoints.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(t.Context(), Split{
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 		RecordingID: recID, SourcePath: "/tmp/history-endpoints.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/history-endpoints/output_00000.mp3",
 	}))
-	splits, err := fetchSplitsForRecording(t.Context(), recID)
+	splits, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 1)
 
@@ -127,7 +128,7 @@ func TestHistoryEndpoints(t *testing.T) {
 	resp, err := authedClient().Get(server.URL + "/api/history?sort=frequency")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var entries []HistoryEntry
+	var entries []db.HistoryEntry
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&entries))
 	require.Len(t, entries, 1)
 	require.Equal(t, splits[0].ID, entries[0].Split.ID)
@@ -139,7 +140,7 @@ func TestHistoryEndpoints(t *testing.T) {
 	resp, err = authedClient().Get(server.URL + "/api/history?group=radio")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var groups []RadioHistoryGroup
+	var groups []db.RadioHistoryGroup
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&groups))
 	require.Len(t, groups, 1)
 	require.Equal(t, "TestRadio", groups[0].Radio)

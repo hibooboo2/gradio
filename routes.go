@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/hibooboo2/gradio/db"
 )
 
 // serveAPI runs the management HTTP server until ctx is cancelled.
@@ -173,7 +175,7 @@ func pathID(r *http.Request) (int64, error) {
 }
 
 func handleListSplits(w http.ResponseWriter, r *http.Request) {
-	splits, err := fetchAllSplits(r.Context())
+	splits, err := db.FetchAllSplits(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list splits", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -190,7 +192,7 @@ func handleGetSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	split, err := fetchSplit(r.Context(), id)
+	split, err := db.FetchSplit(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "split not found")
 		return
@@ -224,7 +226,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	split, err := fetchSplit(r.Context(), id)
+	split, err := db.FetchSplit(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "split not found")
 		return
@@ -245,7 +247,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 		split.CustomTitle = *req.Title
 	}
 
-	if err := updateSplit(r.Context(), split); err != nil {
+	if err := db.UpdateSplit(r.Context(), split); err != nil {
 		slog.ErrorContext(r.Context(), "update split", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -269,13 +271,13 @@ func handleRecordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := recordPlay(r.Context(), id); err != nil {
+	if err := db.RecordPlay(r.Context(), id); err != nil {
 		slog.ErrorContext(r.Context(), "record play", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	plays, rating, err := fetchSongStats(r.Context(), id)
+	plays, rating, err := db.FetchSongStats(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -304,13 +306,13 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := setRating(r.Context(), id, req.Rating == "like"); err != nil {
+	if err := db.SetRating(r.Context(), id, req.Rating == "like"); err != nil {
 		slog.ErrorContext(r.Context(), "set rating", "err", err, "id", id, "rating", req.Rating)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	plays, rating, err := fetchSongStats(r.Context(), id)
+	plays, rating, err := db.FetchSongStats(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -319,7 +321,7 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleListRecordings(w http.ResponseWriter, r *http.Request) {
-	recordings, err := fetchAllRecordings(r.Context())
+	recordings, err := db.FetchAllRecordings(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list recordings", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -464,25 +466,16 @@ var splitsViewTemplate = template.Must(template.New("splits").Funcs(viewFuncs).P
 type radioGroup struct {
 	Radio  string
 	Color  string
-	Splits []Split
+	Splits []db.Split
 }
 
 // radioPalette assigns a stable color to each distinct radio.
-var radioPalette = []string{
-	"#6366f1", // indigo
-	"#ec4899", // pink
-	"#10b981", // emerald
-	"#f59e0b", // amber
-	"#06b6d4", // cyan
-	"#8b5cf6", // violet
-	"#ef4444", // red
-	"#14b8a6", // teal
-}
+var radioPalette = db.RadioPalette
 
 // handleSplitsView renders an htmx-friendly HTML fragment listing all splits,
 // grouped by radio.
 func handleSplitsView(w http.ResponseWriter, r *http.Request) {
-	splits, err := fetchAllSplits(r.Context())
+	splits, err := db.FetchAllSplits(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list splits view", "err", err)
 		http.Error(w, "failed to load splits", http.StatusInternalServerError)
@@ -491,7 +484,7 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 
 	// Group splits by radio, preserving first-seen order.
 	order := []string{}
-	byRadio := map[string][]Split{}
+	byRadio := map[string][]db.Split{}
 	for _, s := range splits {
 		radio := radioFromPath(r.Context(), s.SourcePath)
 		if _, ok := byRadio[radio]; !ok {
@@ -530,5 +523,5 @@ func radioFromPath(ctx context.Context, path string) string {
 	if dir == "." || dir == "" || dir == "recordings" {
 		return "manual"
 	}
-	return radioDisplayName(ctx, dir)
+	return db.RadioDisplayName(ctx, dir)
 }

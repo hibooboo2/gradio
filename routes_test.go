@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibooboo2/gradio/db"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -45,16 +46,16 @@ func TestRoutes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), "/tmp/routes-test.mp3", "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), "/tmp/routes-test.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(t.Context(), Split{
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 		RecordingID: recID,
 		SourcePath:  "/tmp/routes-test.mp3",
 		Index:       0,
@@ -62,7 +63,7 @@ func TestRoutes(t *testing.T) {
 		End:         20.75,
 		OutputPath:  "/tmp/routes-test/output_00000.mp3",
 	}))
-	require.NoError(t, insertSplit(t.Context(), Split{
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 		RecordingID: recID,
 		SourcePath:  "/tmp/routes-test.mp3",
 		Index:       1,
@@ -90,7 +91,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var updated Split
+		var updated db.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
 		require.InDelta(t, 11.25, updated.Start, 0.0001)
 		require.InDelta(t, 19.5, updated.End, 0.0001)
@@ -108,7 +109,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var updated Split
+		var updated db.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
 		require.InDelta(t, 20.75, updated.Start, 0.0001)
 		require.InDelta(t, 40.0, updated.End, 0.0001)
@@ -121,7 +122,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var split Split
+		var split db.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&split))
 		require.Equal(t, first.ID, split.ID)
 	})
@@ -139,20 +140,20 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var recs []Recording
+		var recs []db.Recording
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&recs))
 		require.NotEmpty(t, recs)
 	})
 }
 
-func listSplits(t *testing.T, baseURL string) []Split {
+func listSplits(t *testing.T, baseURL string) []db.Split {
 	t.Helper()
 	resp, err := authedClient().Get(baseURL + "/api/splits")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var splits []Split
+	var splits []db.Split
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&splits))
 	return splits
 }
@@ -166,26 +167,26 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
-	recID, err := insertRecording(t.Context(), "/tmp/endpoints.mp3", "TestRadio", time.Now(), 123)
+	recID, err := db.InsertRecording(t.Context(), "/tmp/endpoints.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(t.Context(), Split{
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 		RecordingID: recID, SourcePath: "/tmp/endpoints.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/endpoints/output_00000.mp3",
 	}))
-	require.NoError(t, insertSplit(t.Context(), Split{
+	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
 		RecordingID: recID, SourcePath: "/tmp/endpoints.mp3",
 		Index: 1, Start: 100, End: 200,
 		OutputPath: "split_music/TestRadio/endpoints/output_00001.mp3",
 	}))
-	splits, err := fetchSplitsForRecording(t.Context(), recID)
+	splits, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 2)
 
@@ -287,7 +288,7 @@ func TestActiveRecordingsEndpoints(t *testing.T) {
 	require.Empty(t, out.Queued)
 }
 
-func splitByIndex(t *testing.T, splits []Split, index int) Split {
+func splitByIndex(t *testing.T, splits []db.Split, index int) db.Split {
 	t.Helper()
 	for _, s := range splits {
 		if s.Index == index {
@@ -295,5 +296,5 @@ func splitByIndex(t *testing.T, splits []Split, index int) Split {
 		}
 	}
 	t.Fatalf("no split with index %d", index)
-	return Split{}
+	return db.Split{}
 }

@@ -1,4 +1,4 @@
-.PHONY: run build play docker-db clean_data
+.PHONY: run build play docker-db clean_data test
 
 COCKROACH_IMAGE ?= cockroachdb/cockroach:latest
 COCKROACH_CONTAINER ?= gradio-cockroach
@@ -45,3 +45,8 @@ clean_data:
 	@find ./recordings ./split_music -type f -name "*.mp3" -size -1M -print -exec sh -c 'dir=$$(dirname "$$1"); rm -f "$$1"; if [ -z "$$(ls -A "$$dir" 2>/dev/null)" ]; then echo "Removing empty directory: $$dir"; rmdir "$$dir" 2>/dev/null || true; fi' _ {} \; 2>/dev/null || true
 	@find ./recordings ./split_music -mindepth 1 -type d -empty -delete 2>/dev/null || true
 	@echo "clean_data complete."
+
+test:
+	@$(MAKE) docker-db COCKROACH_PORT=26257
+	@echo "Running tests..."
+	go test ./... -p 1 -count=1 -v

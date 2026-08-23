@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/hibooboo2/gradio/db"
 )
 
 // historyDefaultLimit is how many history entries the view shows by default.
@@ -20,8 +22,8 @@ type historyViewData struct {
 	Group   bool   // group entries by radio
 	Limit   int
 	Total   int // number of distinct songs shown
-	Entries []HistoryEntry
-	Groups  []RadioHistoryGroup
+	Entries []db.HistoryEntry
+	Groups  []db.RadioHistoryGroup
 }
 
 // historyViewTemplate renders the htmx fragment for the play history tab. It
@@ -130,16 +132,16 @@ func historyParams(r *http.Request) (sort string, group bool, limit int) {
 func handleHistoryView(w http.ResponseWriter, r *http.Request) {
 	sort, group, limit := historyParams(r)
 
-	var entries []HistoryEntry
-	var groups []RadioHistoryGroup
+	var entries []db.HistoryEntry
+	var groups []db.RadioHistoryGroup
 	var err error
 
 	if group {
-		groups, err = fetchPlayHistoryGrouped(r.Context(), limit)
+		groups, err = db.FetchPlayHistoryGrouped(r.Context(), limit)
 	} else if sort == "frequency" {
-		entries, err = fetchPlayHistoryFrequency(r.Context(), limit)
+		entries, err = db.FetchPlayHistoryFrequency(r.Context(), limit)
 	} else {
-		entries, err = fetchPlayHistoryRecency(r.Context(), limit)
+		entries, err = db.FetchPlayHistoryRecency(r.Context(), limit)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "load play history", "err", err)
@@ -174,7 +176,7 @@ func handleHistoryJSON(w http.ResponseWriter, r *http.Request) {
 	sort, group, limit := historyParams(r)
 
 	if group {
-		groups, err := fetchPlayHistoryGrouped(r.Context(), limit)
+		groups, err := db.FetchPlayHistoryGrouped(r.Context(), limit)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "play history json", "err", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -184,12 +186,12 @@ func handleHistoryJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var entries []HistoryEntry
+	var entries []db.HistoryEntry
 	var err error
 	if sort == "frequency" {
-		entries, err = fetchPlayHistoryFrequency(r.Context(), limit)
+		entries, err = db.FetchPlayHistoryFrequency(r.Context(), limit)
 	} else {
-		entries, err = fetchPlayHistoryRecency(r.Context(), limit)
+		entries, err = db.FetchPlayHistoryRecency(r.Context(), limit)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "play history json", "err", err)

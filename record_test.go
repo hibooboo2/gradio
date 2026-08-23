@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibooboo2/gradio/db"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -35,24 +36,24 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	}
 	require.NoError(t, admin.Close())
 
-	setRecordDBPath(testDBPath)
-	CreateDBHandle()
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
 
 	// Start from a clean slate so the test is hermetic and deterministic.
-	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(t.Context(), recordDB))
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
 	// Seed real stations so RecordOnce has live streams to hit.
 	seedTestStations(t)
 
-	stations, err := fetchRadioStations(t.Context())
+	stations, err := db.FetchRadioStations(t.Context())
 	require.NoError(t, err)
 
 	// Pick up to 5 stations with a resolvable URL (deduped by name so two
 	// stations never share a recordings directory).
 	seen := map[string]bool{}
-	var usable []RadioStation
+	var usable []db.RadioStation
 	for _, s := range stations {
 		if s.URLResolved == "" || seen[s.Name] {
 			continue
@@ -69,7 +70,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 
 	// Skip stations that are not reachable so a single dead stream does not
 	// make the test flaky.
-	var reachable []RadioStation
+	var reachable []db.RadioStation
 	for _, s := range usable {
 		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ok := stationReachable(checkCtx, s.URLResolved)
@@ -126,7 +127,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	successes := 0
 	for i, rec := range recorders {
 		err := results[i]
-		dir := RecordingsDir(rec.radioName)
+		dir := db.RecordingsDir(rec.radioName)
 
 		rec.mu.Lock()
 		bufLen := 0
@@ -169,12 +170,12 @@ func seedTestStations(t *testing.T) {
 	if err == nil {
 		var page []radioBrowserStation
 		if err := json.Unmarshal(body, &page); err == nil {
-			stations := make([]RadioStation, 0, len(page))
+			stations := make([]db.RadioStation, 0, len(page))
 			for _, s := range page {
 				if s.URLResolved == "" {
 					continue
 				}
-				stations = append(stations, RadioStation{
+				stations = append(stations, db.RadioStation{
 					StationUUID:   s.StationUUID,
 					Name:          s.Name,
 					URLResolved:   s.URLResolved,
@@ -185,7 +186,7 @@ func seedTestStations(t *testing.T) {
 				})
 			}
 			if len(stations) > 0 {
-				require.NoError(t, upsertRadioStations(t.Context(), stations))
+				require.NoError(t, db.UpsertRadioStations(t.Context(), stations))
 				t.Logf("seeded %d stations from initstations_james.json", len(stations))
 				return
 			}
@@ -193,7 +194,7 @@ func seedTestStations(t *testing.T) {
 	}
 
 	// Fallback: the two known-good default streams.
-	require.NoError(t, upsertRadioStations(t.Context(), []RadioStation{
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []db.RadioStation{
 		{StationUUID: "default-1", Name: "GayPHXRadio", URLResolved: streamURL},
 		{StationUUID: "default-2", Name: "RandomRadio", URLResolved: streamURL2},
 	}))

@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,13 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/hibooboo2/gradio/db"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,17 +37,6 @@ type boundary struct {
 const (
 	silenceNoise    = "-17.8dB"
 	silenceDuration = "1.3"
-
-	// Classifications assigned to a split when it is first created. A split
-	// under a minute is unlikely to be a full song; anything at or over a
-	// minute is a probable song.
-	classificationNotSong       = "not_song"
-	classificationLikelySong    = "likely_song"
-	classificationCommercial    = "commercial"
-	classificationSong          = "song"
-	classificationReSplit       = "re_split"
-	classificationInformational = "informational"
-	classificationNews          = "news"
 )
 
 // classificationOption pairs a classification value with the emoji + label
@@ -64,13 +49,13 @@ type classificationOption struct {
 // classificationOptions is the central list of every classification a split
 // may carry, used by the UI dropdowns and for validation.
 var classificationOptions = []classificationOption{
-	{Value: classificationNotSong, Label: "⏭️ Not Song / Short clip"},
-	{Value: classificationLikelySong, Label: "🎵 Likely Song"},
-	{Value: classificationSong, Label: "🎶 Song"},
-	{Value: classificationCommercial, Label: "📢 Commercial"},
-	{Value: classificationInformational, Label: "ℹ️ Informational"},
-	{Value: classificationNews, Label: "📰 News"},
-	{Value: classificationReSplit, Label: "✂️ Re-split"},
+	{Value: db.ClassificationNotSong, Label: "⏭️ Not Song / Short clip"},
+	{Value: db.ClassificationLikelySong, Label: "🎵 Likely Song"},
+	{Value: db.ClassificationSong, Label: "🎶 Song"},
+	{Value: db.ClassificationCommercial, Label: "📢 Commercial"},
+	{Value: db.ClassificationInformational, Label: "ℹ️ Informational"},
+	{Value: db.ClassificationNews, Label: "📰 News"},
+	{Value: db.ClassificationReSplit, Label: "✂️ Re-split"},
 }
 
 // validClassifications is the set of classification values a split may carry.
@@ -111,93 +96,6 @@ var (
 	silenceEndRE   = regexp.MustCompile(`silence_end:\s*([0-9.]+)`)
 )
 
-var (
-	memoizeDB     *sql.DB
-	memoizeDBOnce sync.Once
-)
-
-func memoizeDBHandle(ctx context.Context) *sql.DB {
-	memoizeDBOnce.Do(func() {
-		db, err := sql.Open("pgx", defaultDBPath)
-		if err != nil {
-			slog.Error("memoize: open db", "err", err)
-			os.Exit(1)
-			return
-		}
-
-		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS memoize (
-			op     STRING NOT NULL,
-			input  STRING NOT NULL,
-			result STRING NOT NULL,
-			PRIMARY KEY (op, input)
-		)`); err != nil {
-			slog.Error("memoize: create table", "err", err)
-			os.Exit(1)
-			return
-		}
-
-		memoizeDB = db
-	})
-
-	return memoizeDB
-}
-
-// Memoize runs f on the inputPath. The result is stored in a sqlite database
-// keyed by the function name and the input path. When Memoize is called again
-// with the same op and input, the stored result is returned instead of
-// running f. If the database is not usable, f is run and the error is logged.
-func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context.Context, inputPath string, f op) (Val, error) {
-	var result Val
-
-	// db := memoizeDBHandle()
-	if memoizeDB != nil {
-		var data string
-		err := memoizeDB.QueryRowContext(ctx,
-			`SELECT result FROM memoize WHERE op = $1 AND input = $2`,
-			opName(f), inputPath,
-		).Scan(&data)
-		switch {
-		case err == sql.ErrNoRows:
-			// No cached result, run f below.
-		case err != nil:
-			slog.Error("memoize: query", "err", err)
-		default:
-			if err := json.Unmarshal([]byte(data), &result); err != nil {
-				slog.Error("memoize: unmarshal", "err", err)
-			} else {
-				return result, nil
-			}
-		}
-	}
-
-	result, err := f(ctx, inputPath)
-	if err != nil {
-		return result, err
-	}
-
-	if memoizeDB != nil {
-		data, err := json.Marshal(result)
-		if err != nil {
-			slog.Error("memoize: marshal", "err", err)
-			return result, nil
-		}
-
-		if _, err := memoizeDB.ExecContext(ctx,
-			`INSERT INTO memoize (op, input, result) VALUES ($1, $2, $3)
-			 ON CONFLICT(op, input) DO UPDATE SET result = excluded.result`,
-			opName(f), inputPath, string(data),
-		); err != nil {
-			slog.Error("memoize: store", "err", err)
-		}
-	}
-
-	return result, nil
-}
-
-func opName(f any) string {
-	return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
-}
-
 func SplitStream(ctx context.Context, fname string) error {
 	info, err := os.Stat(fname)
 	if err != nil {
@@ -209,21 +107,21 @@ func SplitStream(ctx context.Context, fname string) error {
 	}
 	// When the file lives under a hashed recordings directory, resolve the hash
 	// back to the original station name so the DB stores the display name.
-	radio = radioDisplayName(ctx, radio)
-	id, err := insertRecording(ctx, fname, radio, info.ModTime(), info.Size())
+	radio = db.RadioDisplayName(ctx, radio)
+	id, err := db.InsertRecording(ctx, fname, radio, info.ModTime(), info.Size())
 	if err != nil {
 		return err
 	}
-	rec := Recording{
+	rec := db.Recording{
 		ID:         id,
 		SourcePath: fname,
 		Radio:      radio,
 		RecordedAt: info.ModTime(),
 		SizeBytes:  info.Size(),
-		Status:     StatusProcessed,
+		Status:     db.StatusProcessed,
 	}
 
-	err = setRecordingStatus(ctx, id, StatusProcessing)
+	err = db.SetRecordingStatus(ctx, id, db.StatusProcessing)
 	if err != nil {
 		return fmt.Errorf("failed to set recording status: %w", err)
 	}
@@ -232,7 +130,7 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return fmt.Errorf("failed to split recording: %w", err)
 	}
-	err = setRecordingStatus(ctx, id, StatusProcessed)
+	err = db.SetRecordingStatus(ctx, id, db.StatusProcessed)
 	if err != nil {
 		return fmt.Errorf("failed to store recording status: %w", err)
 	}
@@ -243,7 +141,7 @@ func SplitStream(ctx context.Context, fname string) error {
 // splitRecording splits a single source recording and stores each resulting
 // output file, its cutoffs, and its position in the original stream, in the
 // splits table.
-func splitRecording(ctx context.Context, rec Recording) error {
+func splitRecording(ctx context.Context, rec db.Recording) error {
 	wd, _ := os.Getwd()
 	if !filepath.IsAbs(rec.SourcePath) {
 		rec.SourcePath = filepath.Join(wd, rec.SourcePath)
@@ -254,7 +152,7 @@ func splitRecording(ctx context.Context, rec Recording) error {
 	// entirely. The recording_splits row is written only after every split
 	// file has been created and stored, so its presence means the splits table
 	// is complete.
-	if folder, done, err := recordingSplitFolder(ctx, rec.ID); err != nil {
+	if folder, done, err := db.RecordingSplitFolder(ctx, rec.ID); err != nil {
 		return fmt.Errorf("check recording split: %w", err)
 	} else if done {
 		if _, err := os.Stat(folder); err == nil {
@@ -264,11 +162,11 @@ func splitRecording(ctx context.Context, rec Recording) error {
 		slog.InfoContext(ctx, "recording split folder missing, re-splitting", "recording", rec.ID, "folder", folder)
 	}
 
-	existing, err := fetchSplitsForRecording(ctx, rec.ID)
+	existing, err := db.FetchSplitsForRecording(ctx, rec.ID)
 	if err != nil {
 		return fmt.Errorf("fetch existing splits for recording %d: %w", rec.ID, err)
 	}
-	existingByIndex := make(map[int]Split, len(existing))
+	existingByIndex := make(map[int]db.Split, len(existing))
 	for _, s := range existing {
 		existingByIndex[s.Index] = s
 	}
@@ -311,7 +209,7 @@ func splitRecording(ctx context.Context, rec Recording) error {
 				// The row may be missing if a previous run was interrupted
 				// between writing the file and storing the split.
 				if _, ok := existingByIndex[idx]; !ok {
-					if err := insertSplit(ctx, Split{
+					if err := db.InsertSplit(ctx, db.Split{
 						RecordingID:    rec.ID,
 						SourcePath:     rec.SourcePath,
 						Index:          idx,
@@ -332,7 +230,7 @@ func splitRecording(ctx context.Context, rec Recording) error {
 				return nil
 			}
 
-			err = insertSplit(ctx, Split{
+			err = db.InsertSplit(ctx, db.Split{
 				RecordingID:    rec.ID,
 				SourcePath:     rec.SourcePath,
 				Index:          idx,
@@ -352,31 +250,7 @@ func splitRecording(ctx context.Context, rec Recording) error {
 		return err
 	}
 
-	return markRecordingSplit(ctx, rec.ID, splitOutputDir(rec.Radio, rec.SourcePath))
-}
-
-// nextSplitPositions returns n positions not yet used by any split of a
-// recording, so newly created splits never collide with existing ones.
-func nextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, error) {
-	if recordDB == nil {
-		return nil, fmt.Errorf("nil db")
-	}
-
-	var maxPos sql.NullInt64
-	if err := recordDB.QueryRowContext(ctx,
-		`SELECT MAX(position) FROM splits WHERE recording_id = $1`,
-		recordingID,
-	).Scan(&maxPos); err != nil {
-		return nil, err
-	}
-
-	pos := make([]int, n)
-	next := int(maxPos.Int64)
-	for i := range pos {
-		next++
-		pos[i] = next
-	}
-	return pos, nil
+	return db.MarkRecordingSplit(ctx, rec.ID, splitOutputDir(rec.Radio, rec.SourcePath))
 }
 
 // resplitSplit replaces a split with two finer splits cut at the given time
@@ -384,16 +258,16 @@ func nextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, e
 // file are left untouched; only its classification changes to re_split. Both
 // new splits get their own output files, extracted from the original recording
 // (not from the existing split file) so the new cut point is exact.
-func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Split, splitA Split, splitB Split, err error) {
-	orig, err := fetchSplit(ctx, splitID)
+func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.Split, splitA db.Split, splitB db.Split, err error) {
+	orig, err := db.FetchSplit(ctx, splitID)
 	if err != nil {
-		return Split{}, Split{}, Split{}, err
+		return db.Split{}, db.Split{}, db.Split{}, err
 	}
 	if cut <= orig.Start || cut >= orig.End {
-		return Split{}, Split{}, Split{}, fmt.Errorf("%w: cut %v outside [%v, %v]", errCutOutsideSplit, cut, orig.Start, orig.End)
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("%w: cut %v outside [%v, %v]", errCutOutsideSplit, cut, orig.Start, orig.End)
 	}
-	if orig.Classification == classificationReSplit {
-		return Split{}, Split{}, Split{}, fmt.Errorf("split %d is already re_split", splitID)
+	if orig.Classification == db.ClassificationReSplit {
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("split %d is already re_split", splitID)
 	}
 
 	wd, _ := os.Getwd()
@@ -402,28 +276,28 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Spl
 		inputPath = filepath.Join(wd, inputPath)
 	}
 
-	positions, err := nextSplitPositions(ctx, orig.RecordingID, 2)
+	positions, err := db.NextSplitPositions(ctx, orig.RecordingID, 2)
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("allocate split positions: %w", err)
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("allocate split positions: %w", err)
 	}
 
 	radio := radioFromPath(ctx, orig.SourcePath)
 	// Prefer the original station name from the recordings table: the source
 	// path's directory is a hash, not the display name.
-	if rec, err := fetchRecordingByID(ctx, orig.RecordingID); err == nil {
+	if rec, err := db.FetchRecordingByID(ctx, orig.RecordingID); err == nil {
 		radio = rec.Radio
 	}
 
 	outA, err := writeSegment(ctx, radio, inputPath, orig.Start, cut, positions[0])
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("write first segment: %w", err)
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("write first segment: %w", err)
 	}
 	outB, err := writeSegment(ctx, radio, inputPath, cut, orig.End, positions[1])
 	if err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("write second segment: %w", err)
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("write second segment: %w", err)
 	}
 
-	a := Split{
+	a := db.Split{
 		RecordingID:    orig.RecordingID,
 		SourcePath:     orig.SourcePath,
 		Index:          positions[0],
@@ -432,7 +306,7 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Spl
 		OutputPath:     outA,
 		Classification: orig.Classification,
 	}
-	b := Split{
+	b := db.Split{
 		RecordingID:    orig.RecordingID,
 		SourcePath:     orig.SourcePath,
 		Index:          positions[1],
@@ -442,18 +316,18 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original Spl
 		Classification: orig.Classification,
 	}
 
-	if err := insertSplit(ctx, a); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("store first split: %w", err)
+	if err := db.InsertSplit(ctx, a); err != nil {
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("store first split: %w", err)
 	}
-	if err := insertSplit(ctx, b); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("store second split: %w", err)
+	if err := db.InsertSplit(ctx, b); err != nil {
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("store second split: %w", err)
 	}
 
 	// Mark the original only after the new splits exist so a failure leaves it
 	// fully playable.
-	orig.Classification = classificationReSplit
-	if err := updateSplit(ctx, orig); err != nil {
-		return Split{}, Split{}, Split{}, fmt.Errorf("mark split re_split: %w", err)
+	orig.Classification = db.ClassificationReSplit
+	if err := db.UpdateSplit(ctx, orig); err != nil {
+		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("mark split re_split: %w", err)
 	}
 
 	return orig, a, b, nil
@@ -473,10 +347,10 @@ const mergeWindowSeconds = 180.0
 // findAdjacentSplit returns the split that comes immediately before (prev=true)
 // or after (prev=false) the given split in the same source recording, matching
 // by boundary position.
-func findAdjacentSplit(ctx context.Context, cur Split, prev bool) (Split, error) {
-	splits, err := fetchSplitsForRecording(ctx, cur.RecordingID)
+func findAdjacentSplit(ctx context.Context, cur db.Split, prev bool) (db.Split, error) {
+	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
-		return Split{}, fmt.Errorf("fetch recording splits: %w", err)
+		return db.Split{}, fmt.Errorf("fetch recording splits: %w", err)
 	}
 
 	for _, s := range splits {
@@ -495,7 +369,7 @@ func findAdjacentSplit(ctx context.Context, cur Split, prev bool) (Split, error)
 	if prev {
 		dir = "previous"
 	}
-	return Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, cur.ID, dir)
+	return db.Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, cur.ID, dir)
 }
 
 // detectSilenceWindow runs ffmpeg silencedetect on a slice of the input file
@@ -591,11 +465,11 @@ func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, win
 // the given boundaries (within float tolerance), excluding the current split.
 // It is used to detect when a silence-expanded merge absorbs an existing split
 // whose audio is now fully contained in the merged output.
-func findSplitByBounds(ctx context.Context, cur Split, start, end float64) (Split, bool) {
-	splits, err := fetchSplitsForRecording(ctx, cur.RecordingID)
+func findSplitByBounds(ctx context.Context, cur db.Split, start, end float64) (db.Split, bool) {
+	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
 		slog.Error("find split by bounds", "err", err, "recording", cur.RecordingID, "start", start, "end", end)
-		return Split{}, false
+		return db.Split{}, false
 	}
 	for _, s := range splits {
 		if s.ID == cur.ID {
@@ -605,7 +479,7 @@ func findSplitByBounds(ctx context.Context, cur Split, start, end float64) (Spli
 			return s, true
 		}
 	}
-	return Split{}, false
+	return db.Split{}, false
 }
 
 // findSplitsWithinBounds returns the splits of the same recording that are
@@ -615,18 +489,18 @@ func findSplitByBounds(ctx context.Context, cur Split, start, end float64) (Spli
 // splits between the found silence and the current split), so every contained
 // split must be marked re_split or it would remain playable and overlap the
 // merged output.
-func findSplitsWithinBounds(ctx context.Context, cur Split, mergedID int64, newStart, newEnd float64) []Split {
-	splits, err := fetchSplitsForRecording(ctx, cur.RecordingID)
+func findSplitsWithinBounds(ctx context.Context, cur db.Split, mergedID int64, newStart, newEnd float64) []db.Split {
+	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
 		slog.Error("find splits within bounds", "err", err, "recording", cur.RecordingID, "start", newStart, "end", newEnd)
 		return nil
 	}
-	var contained []Split
+	var contained []db.Split
 	for _, s := range splits {
 		if s.ID == cur.ID || s.ID == mergedID {
 			continue
 		}
-		if s.Classification == classificationReSplit {
+		if s.Classification == db.ClassificationReSplit {
 			continue
 		}
 		if s.Start >= newStart && s.End <= newEnd {
@@ -650,20 +524,20 @@ func findSplitsWithinBounds(ctx context.Context, cur Split, mergedID int64, newS
 // split instead (the previous behavior), so a split with no real silence nearby
 // can still be joined with its neighbor. In that fallback case other holds the
 // adjacent split; in the silence-expansion case other is nil.
-func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other *Split, merged Split, err error) {
-	cur, err := fetchSplit(ctx, id)
+func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, other *db.Split, merged db.Split, err error) {
+	cur, err := db.FetchSplit(ctx, id)
 	if err != nil {
-		return Split{}, nil, Split{}, err
+		return db.Split{}, nil, db.Split{}, err
 	}
-	if cur.Classification == classificationReSplit {
-		return Split{}, nil, Split{}, fmt.Errorf("split %d is already re_split", id)
+	if cur.Classification == db.ClassificationReSplit {
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("split %d is already re_split", id)
 	}
 
 	// Go back to the source recording this split came from and expand its
 	// boundaries to the next silence in the requested direction.
-	rec, err := fetchRecordingByID(ctx, cur.RecordingID)
+	rec, err := db.FetchRecordingByID(ctx, cur.RecordingID)
 	if err != nil {
-		return Split{}, nil, Split{}, fmt.Errorf("fetch recording: %w", err)
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("fetch recording: %w", err)
 	}
 
 	wd, _ := os.Getwd()
@@ -690,7 +564,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 	if windowEnd > windowStart {
 		silences, err := detectSilenceWindow(ctx, inputPath, windowStart, windowEnd)
 		if err != nil {
-			return Split{}, nil, Split{}, fmt.Errorf("detect silence window: %w", err)
+			return db.Split{}, nil, db.Split{}, fmt.Errorf("detect silence window: %w", err)
 		}
 		for s := range silences {
 			if prev {
@@ -727,10 +601,10 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 		// split so a split with no real silence nearby can still be joined.
 		adj, err := findAdjacentSplit(ctx, cur, prev)
 		if err != nil {
-			return Split{}, nil, Split{}, err
+			return db.Split{}, nil, db.Split{}, err
 		}
-		if adj.Classification == classificationReSplit {
-			return Split{}, nil, Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
+		if adj.Classification == db.ClassificationReSplit {
+			return db.Split{}, nil, db.Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
 		}
 		other = &adj
 		if prev {
@@ -740,9 +614,9 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 		}
 	}
 
-	positions, err := nextSplitPositions(ctx, cur.RecordingID, 1)
+	positions, err := db.NextSplitPositions(ctx, cur.RecordingID, 1)
 	if err != nil {
-		return Split{}, nil, Split{}, fmt.Errorf("allocate split position: %w", err)
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("allocate split position: %w", err)
 	}
 
 	radio := radioFromPath(ctx, cur.SourcePath)
@@ -754,10 +628,10 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 
 	out, err := writeSegment(ctx, radio, inputPath, start, end, positions[0])
 	if err != nil {
-		return Split{}, nil, Split{}, fmt.Errorf("write merged segment: %w", err)
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("write merged segment: %w", err)
 	}
 
-	merged = Split{
+	merged = db.Split{
 		RecordingID:    cur.RecordingID,
 		SourcePath:     cur.SourcePath,
 		Index:          positions[0],
@@ -768,9 +642,9 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 	}
 	// insertSplit takes a value copy, so compute the deterministic id here to
 	// keep merged.ID available for the re_split marking below.
-	merged.ID = splitID(merged.SourcePath, merged.Start, merged.End)
-	if err := insertSplit(ctx, merged); err != nil {
-		return Split{}, nil, Split{}, fmt.Errorf("store merged split: %w", err)
+	merged.ID = db.SplitID(merged.SourcePath, merged.Start, merged.End)
+	if err := db.InsertSplit(ctx, merged); err != nil {
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("store merged split: %w", err)
 	}
 
 	// Mark the source split(s) re_split only after the merged split exists so a
@@ -779,14 +653,14 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 	// source split(s) playable alongside the merged split (overlapping audio),
 	// which is non-destructive — no data is lost and the overlap can be
 	// resolved by re-merging or deleting the merged split.
-	cur.Classification = classificationReSplit
-	if err := updateSplit(ctx, cur); err != nil {
-		return Split{}, nil, Split{}, fmt.Errorf("mark split re_split: %w", err)
+	cur.Classification = db.ClassificationReSplit
+	if err := db.UpdateSplit(ctx, cur); err != nil {
+		return db.Split{}, nil, db.Split{}, fmt.Errorf("mark split re_split: %w", err)
 	}
 	if other != nil {
-		other.Classification = classificationReSplit
-		if err := updateSplit(ctx, *other); err != nil {
-			return Split{}, nil, Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
+		other.Classification = db.ClassificationReSplit
+		if err := db.UpdateSplit(ctx, *other); err != nil {
+			return db.Split{}, nil, db.Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
 		}
 	}
 
@@ -796,8 +670,8 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current Split, other 
 	// playable and overlap the merged split. cur and other are already
 	// re_split in the DB by now, so they are skipped.
 	for _, s := range findSplitsWithinBounds(ctx, cur, merged.ID, start, end) {
-		s.Classification = classificationReSplit
-		if err := updateSplit(ctx, s); err != nil {
+		s.Classification = db.ClassificationReSplit
+		if err := db.UpdateSplit(ctx, s); err != nil {
 			slog.Error("mark contained split re_split", "err", err, "split", s.ID, "merged", merged.ID)
 		}
 	}
@@ -902,9 +776,9 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 // based on its duration in the original stream.
 func classifySplit(start, end float64) string {
 	if end-start < 60 {
-		return classificationNotSong
+		return db.ClassificationNotSong
 	}
-	return classificationLikelySong
+	return db.ClassificationLikelySong
 }
 
 // splitOutputDir returns the directory a source recording's split output files
@@ -912,7 +786,7 @@ func classifySplit(start, end float64) string {
 // radio segment is the hash of the station name so names with slashes or other
 // path-hostile characters never break the output path.
 func splitOutputDir(radio, inputPath string) string {
-	return filepath.Join("split_music", RadioHash(radio), strings.Split(filepath.Base(inputPath), ".")[0])
+	return filepath.Join("split_music", db.RadioHash(radio), strings.Split(filepath.Base(inputPath), ".")[0])
 }
 
 // splitOutputPath returns the deterministic path a split's output file will

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/hibooboo2/gradio/db"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -41,6 +42,6 @@ func domainForURL(urlStr string) string {
 }
 
 // domainForStation returns the registrable domain for a station's stream URL.
-func domainForStation(s RadioStation) string {
+func domainForStation(s db.RadioStation) string {
 	return domainForURL(s.URLResolved)
 }

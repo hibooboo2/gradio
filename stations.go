@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/hibooboo2/gradio/db"
 )
 
 // stationsViewTemplate renders the Radio Stations tab fragment: every station
@@ -119,7 +121,7 @@ var favoritesViewTemplate = template.Must(template.New("favorites").Funcs(viewFu
 
 // stationViewRow is one row in the Radio Stations tab.
 type stationViewRow struct {
-	RadioStation
+	db.RadioStation
 	Recording bool
 	Favorited bool
 	Queued    bool
@@ -136,14 +138,14 @@ type stationsViewData struct {
 // handleStationsView renders the Radio Stations tab fragment listing every
 // station in the radio_stations table with its current recording state.
 func handleStationsView(w http.ResponseWriter, r *http.Request) {
-	stations, err := fetchRadioStations(r.Context())
+	stations, err := db.FetchRadioStations(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list radio stations", "err", err)
 		http.Error(w, "failed to load radio stations", http.StatusInternalServerError)
 		return
 	}
 
-	favs, err := fetchFavoriteUUIDs(r.Context())
+	favs, err := db.FetchFavoriteUUIDs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorites", "err", err)
 		http.Error(w, "failed to load favorites", http.StatusInternalServerError)
@@ -173,7 +175,7 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 // handleFavoritesView renders the Favorites tab fragment listing only the
 // stations that have been favorited.
 func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
-	stations, err := fetchFavoriteStations(r.Context())
+	stations, err := db.FetchFavoriteStations(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorite stations", "err", err)
 		http.Error(w, "failed to load favorite stations", http.StatusInternalServerError)
@@ -206,7 +208,7 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 // came from (?view=stations or ?view=favorites) for non-JS fallback.
 func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
-	if _, err := fetchRadioStationByUUID(r.Context(), uuid); err != nil {
+	if _, err := db.FetchRadioStationByUUID(r.Context(), uuid); err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
 			return
@@ -216,7 +218,7 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	favs, err := fetchFavoriteUUIDs(r.Context())
+	favs, err := db.FetchFavoriteUUIDs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorites", "err", err)
 		http.Error(w, "failed to load favorites", http.StatusInternalServerError)
@@ -225,9 +227,9 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 
 	_, wasFavorited := favs[uuid]
 	if wasFavorited {
-		err = removeFavorite(r.Context(), uuid)
+		err = db.RemoveFavorite(r.Context(), uuid)
 	} else {
-		err = addFavorite(r.Context(), uuid)
+		err = db.AddFavorite(r.Context(), uuid)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "toggle favorite", "err", err, "uuid", uuid)
@@ -291,7 +293,7 @@ func wantsJSON(r *http.Request) bool {
 // from. Otherwise it renders the player for the songs recorded so far, or a
 // friendly message when the station has no recorded songs yet.
 func handleStationRecord(w http.ResponseWriter, r *http.Request) {
-	station, err := fetchRadioStationByUUID(r.Context(), r.PathValue("uuid"))
+	station, err := db.FetchRadioStationByUUID(r.Context(), r.PathValue("uuid"))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
@@ -331,7 +333,7 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	splits, err := fetchRadioSplits(r.Context(), station.Name, radioQueueSize)
+	splits, err := db.FetchRadioSplits(r.Context(), station.Name, radioQueueSize)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", station.Name)
 		http.Error(w, "failed to load radio", http.StatusInternalServerError)
@@ -373,9 +375,9 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	songs := make([]PlaylistSong, 0, len(splits))
+	songs := make([]db.PlaylistSong, 0, len(splits))
 	for i, s := range splits {
-		songs = append(songs, PlaylistSong{
+		songs = append(songs, db.PlaylistSong{
 			SplitID:  s.ID,
 			Position: i,
 			Split:    s,
@@ -384,7 +386,7 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := playerViewTemplate.Execute(w, playerViewData{
-		Playlist: Playlist{Name: station.Name},
+		Playlist: db.Playlist{Name: station.Name},
 		Songs:    songs,
 		Subtitle: "Radio · " + station.Name,
 		QueueKey: "radio:" + station.Name,

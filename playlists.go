@@ -13,192 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hibooboo2/gradio/db"
 )
-
-// Playlist is one row in the playlists table: a user-created collection of
-// split output files.
-type Playlist struct {
-	ID         int64
-	Name       string
-	CreatedAt  time.Time
-	TrackCount int
-}
-
-// PlaylistSong is one row in the playlist_splits table: a split that has been
-// added to a playlist, joined with the full split row for display and playback.
-type PlaylistSong struct {
-	PlaylistID int64
-	SplitID    int64
-	Position   int
-	Split      Split
-	Plays      int
-	Rating     int
-}
-
-// createPlaylist inserts a new playlist and returns the created row.
-func createPlaylist(ctx context.Context, name string) (Playlist, error) {
-	if recordDB == nil {
-		return Playlist{}, fmt.Errorf("nil db")
-	}
-
-	var p Playlist
-	var createdAt string
-	err := recordDB.QueryRowContext(ctx, 
-		`INSERT INTO playlists (name) VALUES ($1) RETURNING id, name, created_at`,
-		name,
-	).Scan(&p.ID, &p.Name, &createdAt)
-	if err != nil {
-		return Playlist{}, err
-	}
-	if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
-		p.CreatedAt = t
-	}
-	return p, nil
-}
-
-// deletePlaylist removes a playlist. Its songs are removed by the ON DELETE
-// CASCADE foreign key.
-func deletePlaylist(ctx context.Context, id int64) error {
-	if recordDB == nil {
-		return fmt.Errorf("nil db")
-	}
-	_, err := recordDB.ExecContext(ctx, `DELETE FROM playlists WHERE id = $1`, id)
-	return err
-}
-
-// fetchPlaylist returns a single playlist by id, or an error when it does not
-// exist.
-func fetchPlaylist(ctx context.Context, id int64) (Playlist, error) {
-	if recordDB == nil {
-		return Playlist{}, fmt.Errorf("nil db")
-	}
-
-	var p Playlist
-	var createdAt string
-	err := recordDB.QueryRowContext(ctx, 
-		`SELECT id, name, created_at FROM playlists WHERE id = $1`,
-		id,
-	).Scan(&p.ID, &p.Name, &createdAt)
-	if err != nil {
-		return Playlist{}, err
-	}
-	if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
-		p.CreatedAt = t
-	}
-	return p, nil
-}
-
-// fetchAllPlaylists returns every playlist with its track count, ordered by
-// name.
-func fetchAllPlaylists(ctx context.Context) ([]Playlist, error) {
-	if recordDB == nil {
-		return nil, fmt.Errorf("nil db")
-	}
-
-	rows, err := recordDB.QueryContext(ctx, 
-		`SELECT p.id, p.name, p.created_at, COUNT(ps.id)
-		 FROM playlists p
-		 LEFT JOIN playlist_splits ps ON ps.playlist_id = p.id
-		 GROUP BY p.id
-		 ORDER BY p.name ASC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var playlists []Playlist
-	for rows.Next() {
-		var p Playlist
-		var createdAt string
-		if err := rows.Scan(&p.ID, &p.Name, &createdAt, &p.TrackCount); err != nil {
-			return nil, err
-		}
-		if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
-			p.CreatedAt = t
-		}
-		playlists = append(playlists, p)
-	}
-	return playlists, rows.Err()
-}
-
-// fetchPlaylistSongs returns the splits in a playlist in playlist order.
-func fetchPlaylistSongs(ctx context.Context, playlistID int64) ([]PlaylistSong, error) {
-	if recordDB == nil {
-		return nil, fmt.Errorf("nil db")
-	}
-
-	rows, err := recordDB.QueryContext(ctx, 
-		`SELECT ps.playlist_id, ps.split_id, ps.position,
-		        s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
-		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
-		 FROM playlist_splits ps
-		 JOIN splits s ON s.id = ps.split_id
-		 LEFT JOIN song_plays sp ON sp.split_id = s.id
-		 WHERE ps.playlist_id = $1
-		 ORDER BY ps.position ASC`,
-		playlistID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var songs []PlaylistSong
-	for rows.Next() {
-		var song PlaylistSong
-		if err := rows.Scan(
-			&song.PlaylistID, &song.SplitID, &song.Position,
-			&song.Split.ID, &song.Split.RecordingID, &song.Split.SourcePath, &song.Split.Index,
-			&song.Split.Start, &song.Split.End, &song.Split.OutputPath, &song.Split.Classification, &song.Split.CustomTitle,
-			&song.Plays, &song.Rating,
-		); err != nil {
-			return nil, err
-		}
-		songs = append(songs, song)
-	}
-	return songs, rows.Err()
-}
-
-// addSongToPlaylist appends a split to the end of a playlist. Adding the same
-// split twice is a no-op.
-func addSongToPlaylist(ctx context.Context, playlistID, splitID int64) error {
-	if recordDB == nil {
-		return fmt.Errorf("nil db")
-	}
-
-	_, err := recordDB.ExecContext(ctx, 
-		`INSERT INTO playlist_splits (playlist_id, split_id, position)
-		 SELECT $1, $2, COALESCE(MAX(position) + 1, 0)
-		 FROM playlist_splits WHERE playlist_id = $1
-		 ON CONFLICT (playlist_id, split_id) DO NOTHING`,
-		playlistID, splitID,
-	)
-	return err
-}
-
-// removeSongFromPlaylist removes a split from a playlist.
-func removeSongFromPlaylist(ctx context.Context, playlistID, splitID int64) error {
-	if recordDB == nil {
-		return fmt.Errorf("nil db")
-	}
-
-	_, err := recordDB.ExecContext(ctx, 
-		`DELETE FROM playlist_splits WHERE playlist_id = $1 AND split_id = $2`,
-		playlistID, splitID,
-	)
-	return err
-}
-
-// fetchAllSongs returns every split that can be added to a playlist, newest
-// recording first.
-func fetchAllSongs(ctx context.Context) ([]Split, error) {
-	return fetchAllSplits(ctx)
-}
 
 // derivedSongTitle produces the default human-friendly label for a split's
 // output file, e.g. "Slotex · gradio-2026-08-19_09-47-01 #3".
-func derivedSongTitle(s Split) string {
+func derivedSongTitle(s db.Split) string {
 	base := strings.TrimSuffix(filepath.Base(s.SourcePath), filepath.Ext(s.SourcePath))
 	radio := radioFromPath(context.Background(), s.SourcePath)
 	return fmt.Sprintf("%s · %s #%d", radio, base, s.Index+1)
@@ -207,7 +28,7 @@ func derivedSongTitle(s Split) string {
 // songTitle produces the display label for a split. A user-set custom title
 // (a display-only rename) wins; otherwise the title is derived from the source
 // file name and stream position.
-func songTitle(s Split) string {
+func songTitle(s db.Split) string {
 	if s.CustomTitle != "" {
 		return s.CustomTitle
 	}
@@ -224,20 +45,20 @@ func musicURL(outputPath string) string {
 // playlistsViewData is the data model for the play lists tab fragment.
 type playlistsViewData struct {
 	Playlists []playlistViewItem
-	AllSongs  []Split
+	AllSongs  []db.Split
 	Expanded  int64
 }
 
 // playlistViewItem pairs a playlist with the songs shown when it is expanded.
 type playlistViewItem struct {
-	Playlist
-	Songs []PlaylistSong
+	db.Playlist
+	Songs []db.PlaylistSong
 }
 
 // playerViewData is the data model for the player tab fragment.
 type playerViewData struct {
-	Playlist  Playlist
-	Songs     []PlaylistSong
+	Playlist  db.Playlist
+	Songs     []db.PlaylistSong
 	StartSong int64
 	// Subtitle overrides the default "Playlist · <name>" subtitle, e.g. for a
 	// radio which shows "Radio · <name>".
@@ -507,7 +328,7 @@ var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFu
 
 // playerEmptyData is the data model for the player empty state.
 type playerEmptyData struct {
-	Radios []Radio
+	Radios []db.Radio
 }
 
 // shuffleTrack is one track in the global shuffle queue, as returned by the
@@ -545,7 +366,7 @@ func parseSplitIDs(raw string) []int64 {
 // renderPlaylistsView executes the play lists fragment into w. The playlist
 // with id expand (if any) has its songs loaded and rendered inline.
 func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
-	playlists, err := fetchAllPlaylists(r.Context())
+	playlists, err := db.FetchAllPlaylists(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list playlists", "err", err)
 		http.Error(w, "failed to load playlists", http.StatusInternalServerError)
@@ -553,11 +374,11 @@ func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
 	}
 
 	items := make([]playlistViewItem, 0, len(playlists))
-	var expandedSongs []PlaylistSong
+	var expandedSongs []db.PlaylistSong
 	for _, p := range playlists {
 		item := playlistViewItem{Playlist: p}
 		if p.ID == expand {
-			songs, err := fetchPlaylistSongs(r.Context(), p.ID)
+			songs, err := db.FetchPlaylistSongs(r.Context(), p.ID)
 			if err != nil {
 				slog.ErrorContext(r.Context(), "list playlist songs", "err", err, "playlist", p.ID)
 				http.Error(w, "failed to load playlist songs", http.StatusInternalServerError)
@@ -569,7 +390,7 @@ func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
 		items = append(items, item)
 	}
 
-	allSongs, err := fetchAllSongs(r.Context())
+	allSongs, err := db.FetchAllSongs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list songs", "err", err)
 		http.Error(w, "failed to load songs", http.StatusInternalServerError)
@@ -609,7 +430,7 @@ func handleCreatePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := createPlaylist(r.Context(), name)
+	p, err := db.CreatePlaylist(r.Context(), name)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "create playlist", "err", err)
 		http.Error(w, "failed to create playlist", http.StatusInternalServerError)
@@ -627,7 +448,7 @@ func handleDeletePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := deletePlaylist(r.Context(), id); err != nil {
+	if err := db.DeletePlaylist(r.Context(), id); err != nil {
 		slog.ErrorContext(r.Context(), "delete playlist", "err", err, "id", id)
 		http.Error(w, "failed to delete playlist", http.StatusInternalServerError)
 		return
@@ -651,7 +472,7 @@ func handleAddSong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := addSongToPlaylist(r.Context(), id, splitID); err != nil {
+	if err := db.AddSongToPlaylist(r.Context(), id, splitID); err != nil {
 		slog.ErrorContext(r.Context(), "add song to playlist", "err", err, "playlist", id, "split", splitID)
 		http.Error(w, "failed to add song", http.StatusInternalServerError)
 		return
@@ -675,7 +496,7 @@ func handleRemoveSong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := removeSongFromPlaylist(r.Context(), id, splitID); err != nil {
+	if err := db.RemoveSongFromPlaylist(r.Context(), id, splitID); err != nil {
 		slog.ErrorContext(r.Context(), "remove song from playlist", "err", err, "playlist", id, "split", splitID)
 		http.Error(w, "failed to remove song", http.StatusInternalServerError)
 		return
@@ -698,16 +519,16 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 			exclude = parseSplitIDs(ex)
 		}
 
-		splits, err := fetchGlobalShuffleBatch(r.Context(), shuffleBatchSize, exclude)
+		splits, err := db.FetchGlobalShuffleBatch(r.Context(), shuffleBatchSize, exclude)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "load global shuffle", "err", err)
 			http.Error(w, "failed to load shuffle", http.StatusInternalServerError)
 			return
 		}
 
-		songs := make([]PlaylistSong, 0, len(splits))
+		songs := make([]db.PlaylistSong, 0, len(splits))
 		for i, s := range splits {
-			songs = append(songs, PlaylistSong{
+			songs = append(songs, db.PlaylistSong{
 				SplitID:  s.ID,
 				Position: i,
 				Split:    s,
@@ -718,7 +539,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := playerViewTemplate.Execute(w, playerViewData{
-			Playlist: Playlist{Name: "All Music"},
+			Playlist: db.Playlist{Name: "All Music"},
 			Songs:    songs,
 			Subtitle: "Global Shuffle",
 			QueueKey: "shuffle",
@@ -729,16 +550,16 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if radio := r.URL.Query().Get("radio"); radio != "" {
-		splits, err := fetchRadioSplits(r.Context(), radio, radioQueueSize)
+		splits, err := db.FetchRadioSplits(r.Context(), radio, radioQueueSize)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", radio)
 			http.Error(w, "failed to load radio", http.StatusInternalServerError)
 			return
 		}
 
-		songs := make([]PlaylistSong, 0, len(splits))
+		songs := make([]db.PlaylistSong, 0, len(splits))
 		for i, s := range splits {
-			songs = append(songs, PlaylistSong{
+			songs = append(songs, db.PlaylistSong{
 				SplitID:  s.ID,
 				Position: i,
 				Split:    s,
@@ -747,7 +568,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := playerViewTemplate.Execute(w, playerViewData{
-			Playlist: Playlist{Name: radio},
+			Playlist: db.Playlist{Name: radio},
 			Songs:    songs,
 			Subtitle: "Radio · " + radio,
 			QueueKey: "radio:" + radio,
@@ -759,7 +580,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 
 	playlistID, err := strconv.ParseInt(r.URL.Query().Get("playlist"), 10, 64)
 	if err != nil || playlistID == 0 {
-		radios, rerr := fetchRadios(r.Context())
+		radios, rerr := db.FetchRadios(r.Context())
 		if rerr != nil {
 			slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 		}
@@ -770,10 +591,10 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playlist, err := fetchPlaylist(r.Context(), playlistID)
+	playlist, err := db.FetchPlaylist(r.Context(), playlistID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			radios, rerr := fetchRadios(r.Context())
+			radios, rerr := db.FetchRadios(r.Context())
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 			}
@@ -788,7 +609,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	songs, err := fetchPlaylistSongs(r.Context(), playlistID)
+	songs, err := db.FetchPlaylistSongs(r.Context(), playlistID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list playlist songs", "err", err, "playlist", playlistID)
 		http.Error(w, "failed to load playlist songs", http.StatusInternalServerError)
@@ -823,7 +644,7 @@ func handleShuffleJSON(w http.ResponseWriter, r *http.Request) {
 		exclude = parseSplitIDs(ex)
 	}
 
-	splits, err := fetchGlobalShuffleBatch(r.Context(), shuffleBatchSize, exclude)
+	splits, err := db.FetchGlobalShuffleBatch(r.Context(), shuffleBatchSize, exclude)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "global shuffle json", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -882,7 +703,7 @@ func handleMusic(w http.ResponseWriter, r *http.Request) {
 
 // handleListPlaylistsJSON returns every playlist as JSON.
 func handleListPlaylistsJSON(w http.ResponseWriter, r *http.Request) {
-	playlists, err := fetchAllPlaylists(r.Context())
+	playlists, err := db.FetchAllPlaylists(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list playlists", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -899,13 +720,13 @@ func handleGetPlaylistJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playlist, err := fetchPlaylist(r.Context(), id)
+	playlist, err := db.FetchPlaylist(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "playlist not found")
 		return
 	}
 
-	songs, err := fetchPlaylistSongs(r.Context(), id)
+	songs, err := db.FetchPlaylistSongs(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -919,7 +740,7 @@ func handleGetPlaylistJSON(w http.ResponseWriter, r *http.Request) {
 
 // handleListSongsJSON returns every split available for playlists as JSON.
 func handleListSongsJSON(w http.ResponseWriter, r *http.Request) {
-	songs, err := fetchAllSongs(r.Context())
+	songs, err := db.FetchAllSongs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list songs", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -930,7 +751,7 @@ func handleListSongsJSON(w http.ResponseWriter, r *http.Request) {
 
 // handleListRadiosJSON returns the distinct radios with playable splits.
 func handleListRadiosJSON(w http.ResponseWriter, r *http.Request) {
-	radios, err := fetchRadios(r.Context())
+	radios, err := db.FetchRadios(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list radios", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())

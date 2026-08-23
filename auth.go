@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+
+	"github.com/hibooboo2/gradio/db"
 )
 
 // requireAuth enforces HTTP basic auth on the UI and API. Every request must
@@ -27,11 +29,11 @@ func requireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		user, err := fetchUserByName(r.Context(), username)
+		user, err := db.FetchUserByName(r.Context(), username)
 		switch {
 		case err == sql.ErrNoRows:
 			// Unknown user: create one and log them in.
-			if err := createUser(r.Context(), username, password); err != nil {
+			if err := db.CreateUser(r.Context(), username, password); err != nil {
 				slog.ErrorContext(r.Context(), "create user", "err", err, "user", username)
 				writeError(w, http.StatusInternalServerError, "failed to create user")
 				return
@@ -46,7 +48,7 @@ func requireAuth(next http.Handler) http.Handler {
 		}
 
 		// Known user: the password must match.
-		if !userPasswordMatches(user, password) {
+		if !db.UserPasswordMatches(user, password) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="auth"`)
 			writeError(w, http.StatusUnauthorized, "invalid password")
 			return
