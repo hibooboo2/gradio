@@ -58,6 +58,10 @@ type queuedRecorder struct {
 	url  string
 }
 
+// globalQueueKey is the queue key used for stations that have no registrable
+// domain but are waiting on the global concurrent-recording cap.
+const globalQueueKey = "__global__"
+
 // startResult describes the outcome of a recorderSet.start call.
 type startResult struct {
 	started       bool   // a recorder was actually started
@@ -80,25 +84,46 @@ func NewRecorderSet(ctx context.Context) *recorderSet {
 	}
 }
 
+// maxDownloads returns the configured global concurrent-recording cap, or 0
+// when unlimited. It queries the settings table without holding rs.mu, so it
+// must be called before acquiring the lock. A DB error is treated as
+// unlimited.
+func (rs *recorderSet) maxDownloads() int {
+	ctx := rs.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	max, err := GetMaxDownloads(ctx)
+	if err != nil {
+		return 0
+	}
+	return max
+}
+
 // start begins recording the named station if it is not already being
 // recorded. When another station on the same registrable domain is already
 // recording, the station is queued for the next free slot instead and the
 // returned startResult has queued=true. url may be empty when the station was
 // already registered by the -record flag loop.
 func (rs *recorderSet) start(name, url string) startResult {
+	max := rs.maxDownloads()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	return rs.startLocked(name, url)
+	return rs.startLocked(name, url, max)
 }
 
 // startLocked is start with rs.mu already held.
-func (rs *recorderSet) startLocked(name, url string) startResult {
+func (rs *recorderSet) startLocked(name, url string, max int) startResult {
 	if _, ok := rs.recorders[name]; ok {
 		return startResult{}
 	}
 	domain := domainForURL(url)
 	if domain == "" {
-		// No domain could be determined; start unrestricted.
+		// No domain could be determined; start unrestricted unless the global
+		// concurrent-recording cap is reached, in which case queue globally.
+		if max > 0 && len(rs.recorders) >= max {
+			return rs.enqueueLocked(globalQueueKey, name, url)
+		}
 		rs.launchLocked(name, url, "")
 		return startResult{started: true}
 	}
@@ -114,8 +139,26 @@ func (rs *recorderSet) startLocked(name, url string) startResult {
 		slog.Info("Recorder queued for domain", "radio", name, "domain", domain, "active", active, "position", len(rs.queues[domain]))
 		return startResult{queued: true, domain: domain, queuePosition: len(rs.queues[domain])}
 	}
+	// The domain is free, but the global concurrent-recording cap may still be
+	// reached. Queue on this domain so the station starts when a slot frees.
+	if max > 0 && len(rs.recorders) >= max {
+		return rs.enqueueLocked(domain, name, url)
+	}
 	rs.launchLocked(name, url, domain)
 	return startResult{started: true, domain: domain}
+}
+
+// enqueueLocked adds the station to the FIFO queue for key (a registrable
+// domain or the global queue), deduplicating by name. Callers must hold rs.mu.
+func (rs *recorderSet) enqueueLocked(key, name, url string) startResult {
+	for i, q := range rs.queues[key] {
+		if q.name == name {
+			return startResult{queued: true, domain: key, queuePosition: i + 1}
+		}
+	}
+	rs.queues[key] = append(rs.queues[key], queuedRecorder{name: name, url: url})
+	slog.Info("Recorder queued", "radio", name, "queue", key, "position", len(rs.queues[key]))
+	return startResult{queued: true, domain: key, queuePosition: len(rs.queues[key])}
 }
 
 // launchLocked registers and launches a recorder goroutine, marking the domain
@@ -147,6 +190,7 @@ func (rs *recorderSet) launchLocked(name, url, domain string) {
 // station queued for the same domain (if any) so only one station per domain
 // records at a time.
 func (rs *recorderSet) deleteRecorder(name string) {
+	max := rs.maxDownloads()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rec, ok := rs.recorders[name]
@@ -157,7 +201,8 @@ func (rs *recorderSet) deleteRecorder(name string) {
 	if !ok {
 		return
 	}
-	rs.releaseDomainLocked(name, rec.domain)
+	rs.releaseDomainLocked(name, rec.domain, max)
+	rs.startQueuedLocked(max)
 }
 
 // releaseDomainLocked frees the recording slot for domain when it is held by
@@ -165,7 +210,7 @@ func (rs *recorderSet) deleteRecorder(name string) {
 // When the slot is held by a different recorder (e.g. a bulk -record recorder
 // on the same domain), the domain and its queue are left untouched so only one
 // station per domain records at a time. Callers must hold rs.mu.
-func (rs *recorderSet) releaseDomainLocked(name, domain string) {
+func (rs *recorderSet) releaseDomainLocked(name, domain string, max int) {
 	if domain == "" {
 		return
 	}
@@ -173,8 +218,25 @@ func (rs *recorderSet) releaseDomainLocked(name, domain string) {
 		return
 	}
 	delete(rs.domains, domain)
+	// Respect the global concurrent-recording cap: when it is reached, leave
+	// the queue intact so the next station starts when a slot frees up.
+	if max > 0 && len(rs.recorders) >= max {
+		return
+	}
 	if next := rs.popNextLocked(domain); next != nil {
-		rs.startLocked(next.name, next.url)
+		rs.startLocked(next.name, next.url, max)
+	}
+}
+
+// startQueuedLocked starts the next globally-queued station now that a
+// recording slot has freed up, if the global cap allows it. Callers must hold
+// rs.mu.
+func (rs *recorderSet) startQueuedLocked(max int) {
+	if max > 0 && len(rs.recorders) >= max {
+		return
+	}
+	if next := rs.popNextLocked(globalQueueKey); next != nil {
+		rs.startLocked(next.name, next.url, max)
 	}
 }
 
@@ -231,6 +293,7 @@ func (rs *recorderSet) register(name string, rec *Recorder) {
 // recorded again later. If other stations are queued for the same domain, the
 // next one is started immediately.
 func (rs *recorderSet) unregister(name string) {
+	max := rs.maxDownloads()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rec, ok := rs.recorders[name]
@@ -238,7 +301,8 @@ func (rs *recorderSet) unregister(name string) {
 	if !ok {
 		return
 	}
-	rs.releaseDomainLocked(name, rec.domain)
+	rs.releaseDomainLocked(name, rec.domain, max)
+	rs.startQueuedLocked(max)
 }
 
 // isRecording reports whether the named station is currently being recorded.
@@ -311,6 +375,8 @@ func main() {
 	syncRadio := flag.Bool("sync", false, "force a full resync of the radio stations from radio-browser.info")
 	flag.Parse()
 
+	var wg errgroup.Group
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	defer cancel()
 
@@ -319,27 +385,24 @@ func main() {
 	recorderManager = NewRecorderSet(ctx)
 
 	if *syncRadio {
-		n, err := syncRadioStations(ctx)
-		if err != nil {
-			slog.ErrorContext(ctx, "sync radio stations", "err", err)
-		} else {
-			slog.InfoContext(ctx, "synced radio stations", "count", n)
-		}
-	}
+		wg.Go(func() error {
+			// Populate the recording urls from the radio_stations table. When the
+			// table is empty on first run, load the stations from initstations.json so
+			// all stations are available; otherwise the last sync is reused.
+			stations, err := fetchRadioStations(ctx)
+			if err != nil {
+				slog.ErrorContext(ctx, "load radio stations", "err", err)
+			} else if len(stations) == 0 {
+				n, err := syncRadioStations(ctx)
+				if err != nil {
+					slog.ErrorContext(ctx, "sync radio stations", "err", err)
+				} else {
+					slog.InfoContext(ctx, "synced radio stations", "count", n)
+				}
+			}
 
-	// Populate the recording urls from the radio_stations table. When the
-	// table is empty on first run, load the stations from initstations.json so
-	// all stations are available; otherwise the last sync is reused.
-	stations, err := fetchRadioStations(ctx)
-	if err != nil {
-		slog.ErrorContext(ctx, "load radio stations", "err", err)
-	} else if len(stations) == 0 {
-		n, err := syncRadioStations(ctx)
-		if err != nil {
-			slog.ErrorContext(ctx, "sync radio stations", "err", err)
-		} else {
-			slog.InfoContext(ctx, "synced radio stations", "count", n)
-		}
+			return nil
+		})
 	}
 
 	if *file != "" {
@@ -348,8 +411,6 @@ func main() {
 		}
 		return
 	}
-
-	var wg errgroup.Group
 
 	wg.Go(func() error {
 		if *addr != "" {
@@ -390,32 +451,26 @@ func main() {
 	}
 
 	if *record {
-		for {
-			done := make(chan struct{})
-			wg.Go(func() error {
-				var statuionRecordingGroup errgroup.Group
-				stations, err := fetchRadioStationURLs(ctx)
-				if err == nil {
-					for name, url := range stations {
-						statuionRecordingGroup.Go(func() error {
+		recordingCheck := time.NewTicker(time.Minute * 5)
+		wg.Go(func() error {
+			for {
+				rec, _ := recorderManager.activeRecorders()
+				if len(rec) < 1 {
+					stations, err := fetchRadioStationURLs(ctx)
+					if err == nil {
+						for name, url := range stations {
 							recorderManager.start(name, url)
-							return nil
-						})
+						}
 					}
+					slog.InfoContext(ctx, "Record loop done one starting next")
 				}
-				err = statuionRecordingGroup.Wait()
-				if err != nil {
-					slog.InfoContext(ctx, "Station recording group had err", "err", err)
+				select {
+				case <-recordingCheck.C:
+				case <-ctx.Done():
+					return nil
 				}
-				close(done)
-				return nil
-			})
-			select {
-			case <-done:
-			case <-ctx.Done():
-				break
 			}
-		}
+		})
 	}
 
 	if *play {
@@ -426,7 +481,7 @@ func main() {
 		})
 	}
 
-	err = wg.Wait()
+	err := wg.Wait()
 	if err != nil {
 		slog.ErrorContext(ctx, "Group done", "err", err)
 	}
