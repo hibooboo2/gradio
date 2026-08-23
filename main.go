@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -389,23 +390,30 @@ func main() {
 	}
 
 	if *record {
-		stations, err := fetchRadioStationURLs(ctx)
-		if err == nil {
-			for name, url := range stations {
-				rec := &Recorder{
-					url:       url,
-					radioName: name,
+		for {
+			done := make(chan struct{})
+			wg.Go(func() error {
+				var statuionRecordingGroup errgroup.Group
+				stations, err := fetchRadioStationURLs(ctx)
+				if err == nil {
+					for name, url := range stations {
+						statuionRecordingGroup.Go(func() error {
+							recorderManager.start(name, url)
+							return nil
+						})
+					}
 				}
-				recorderManager.register(name, rec)
-
-				wg.Go(func() error {
-					recContext, cancel := context.WithTimeout(ctx, time.Hour)
-					rec.cancel = cancel
-					defer cancel()
-					rec.RecordOnce(recContext)
-					recorderManager.unregister(name)
-					return nil
-				})
+				err = statuionRecordingGroup.Wait()
+				if err != nil {
+					slog.InfoContext(ctx, "Station recording group had err", "err", err)
+				}
+				close(done)
+				return nil
+			})
+			select {
+			case <-done:
+			case <-ctx.Done():
+				break
 			}
 		}
 	}
@@ -539,11 +547,11 @@ func (r *Recorder) RecordOnce(ctx context.Context) error {
 		}
 
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to read body", "err", err, "radioName", r.radioName)
-			if err == io.EOF {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, context.DeadlineExceeded) {
+				slog.ErrorContext(ctx, "Failed to read body", "err", err, "radioName", r.radioName)
 				return err
 			}
-			return err
+			return nil
 		}
 
 		select {
@@ -586,7 +594,8 @@ func (r *Recorder) storeToDisk() bool {
 			slog.Error("stat closed recording ", "fileName", r.filename, "err", err)
 		} else {
 			slog.Info("Recording to db", "name", r.filename, "size", info.Size())
-			r.recordFileToDB(context.Background(), r.filename, r.started, info.Size())
+			newCtx, _ := context.WithTimeout(context.TODO(), time.Second*3)
+			r.recordFileToDB(newCtx, r.filename, r.started, info.Size())
 			return true
 		}
 	}
