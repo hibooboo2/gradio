@@ -19,23 +19,23 @@ import (
 func TestPlayHistory(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
-	recID, err := insertRecording("/tmp/history.mp3", "TestRadio", time.Now(), 123)
+	recID, err := insertRecording(t.Context(), "/tmp/history.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
 
 	splitIDs := make([]int64, 0, 2)
 	for i := 0; i < 2; i++ {
-		require.NoError(t, insertSplit(Split{
+		require.NoError(t, insertSplit(t.Context(), Split{
 			RecordingID: recID,
 			SourcePath:  "/tmp/history.mp3",
 			Index:       i,
@@ -43,23 +43,23 @@ func TestPlayHistory(t *testing.T) {
 			End:         float64(i*100 + 100),
 			OutputPath:  "split_music/TestRadio/history/output_0000" + strconv.Itoa(i) + ".mp3",
 		}))
-		splits, err := fetchSplitsForRecording(recID)
+		splits, err := fetchSplitsForRecording(t.Context(), recID)
 		require.NoError(t, err)
 		splitIDs = append(splitIDs, splits[len(splits)-1].ID)
 	}
 	require.Len(t, splitIDs, 2)
 
 	// recordPlay appends a history row on every play, not just the first.
-	require.NoError(t, recordPlay(splitIDs[0]))
-	require.NoError(t, recordPlay(splitIDs[0]))
-	require.NoError(t, recordPlay(splitIDs[1]))
+	require.NoError(t, recordPlay(t.Context(), splitIDs[0]))
+	require.NoError(t, recordPlay(t.Context(), splitIDs[0]))
+	require.NoError(t, recordPlay(t.Context(), splitIDs[1]))
 
 	var count int
-	require.NoError(t, recordDB.QueryRow(`SELECT count(*) FROM play_history`).Scan(&count))
+	require.NoError(t, recordDB.QueryRowContext(t.Context(), `SELECT count(*) FROM play_history`).Scan(&count))
 	require.Equal(t, 3, count)
 
 	// Recency: both songs, most recently played first (splitIDs[1] was last).
-	recency, err := fetchPlayHistoryRecency(10)
+	recency, err := fetchPlayHistoryRecency(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, recency, 2)
 	require.Equal(t, splitIDs[1], recency[0].Split.ID)
@@ -71,14 +71,14 @@ func TestPlayHistory(t *testing.T) {
 	require.False(t, recency[0].FirstPlayed.IsZero())
 
 	// Frequency: most played first.
-	freq, err := fetchPlayHistoryFrequency(10)
+	freq, err := fetchPlayHistoryFrequency(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, freq, 2)
 	require.Equal(t, splitIDs[0], freq[0].Split.ID)
 	require.Equal(t, 2, freq[0].Plays)
 
 	// Grouped by radio: one group with both songs.
-	groups, err := fetchPlayHistoryGrouped(10)
+	groups, err := fetchPlayHistoryGrouped(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, groups, 1)
 	require.Equal(t, "TestRadio", groups[0].Radio)
@@ -90,25 +90,25 @@ func TestPlayHistory(t *testing.T) {
 func TestHistoryEndpoints(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
-	recID, err := insertRecording("/tmp/history-endpoints.mp3", "TestRadio", time.Now(), 123)
+	recID, err := insertRecording(t.Context(), "/tmp/history-endpoints.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(Split{
+	require.NoError(t, insertSplit(t.Context(), Split{
 		RecordingID: recID, SourcePath: "/tmp/history-endpoints.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/history-endpoints/output_00000.mp3",
 	}))
-	splits, err := fetchSplitsForRecording(recID)
+	splits, err := fetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 1)
 

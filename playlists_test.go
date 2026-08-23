@@ -16,44 +16,44 @@ import (
 func TestPlaylistLifecycle(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
-	recID, err := insertRecording("/tmp/playlist-test.mp3", "TestRadio", time.Now(), 123)
+	recID, err := insertRecording(t.Context(), "/tmp/playlist-test.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(Split{
+	require.NoError(t, insertSplit(t.Context(), Split{
 		RecordingID: recID, SourcePath: "/tmp/playlist-test.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/playlist-test/output_00000.mp3",
 	}))
-	require.NoError(t, insertSplit(Split{
+	require.NoError(t, insertSplit(t.Context(), Split{
 		RecordingID: recID, SourcePath: "/tmp/playlist-test.mp3",
 		Index: 1, Start: 100, End: 200,
 		OutputPath: "split_music/TestRadio/playlist-test/output_00001.mp3",
 	}))
 
-	splits, err := fetchSplitsForRecording(recID)
+	splits, err := fetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 2)
 
-	p, err := createPlaylist("My Mix")
+	p, err := createPlaylist(t.Context(), "My Mix")
 	require.NoError(t, err)
 	require.NotZero(t, p.ID)
 
-	require.NoError(t, addSongToPlaylist(p.ID, splits[0].ID))
-	require.NoError(t, addSongToPlaylist(p.ID, splits[1].ID))
+	require.NoError(t, addSongToPlaylist(t.Context(), p.ID, splits[0].ID))
+	require.NoError(t, addSongToPlaylist(t.Context(), p.ID, splits[1].ID))
 	// Adding the same split twice is a no-op.
-	require.NoError(t, addSongToPlaylist(p.ID, splits[0].ID))
+	require.NoError(t, addSongToPlaylist(t.Context(), p.ID, splits[0].ID))
 
-	songs, err := fetchPlaylistSongs(p.ID)
+	songs, err := fetchPlaylistSongs(t.Context(), p.ID)
 	require.NoError(t, err)
 	require.Len(t, songs, 2)
 	require.Equal(t, splits[0].ID, songs[0].SplitID)
@@ -61,24 +61,24 @@ func TestPlaylistLifecycle(t *testing.T) {
 	require.Equal(t, splits[1].ID, songs[1].SplitID)
 	require.Equal(t, 1, songs[1].Position)
 
-	all, err := fetchAllPlaylists()
+	all, err := fetchAllPlaylists(t.Context())
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 	require.Equal(t, 2, all[0].TrackCount)
 
-	require.NoError(t, removeSongFromPlaylist(p.ID, splits[0].ID))
-	songs, err = fetchPlaylistSongs(p.ID)
+	require.NoError(t, removeSongFromPlaylist(t.Context(), p.ID, splits[0].ID))
+	songs, err = fetchPlaylistSongs(t.Context(), p.ID)
 	require.NoError(t, err)
 	require.Len(t, songs, 1)
 	require.Equal(t, splits[1].ID, songs[0].SplitID)
 
-	require.NoError(t, deletePlaylist(p.ID))
-	_, err = fetchPlaylist(p.ID)
+	require.NoError(t, deletePlaylist(t.Context(), p.ID))
+	_, err = fetchPlaylist(t.Context(), p.ID)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 
 	// Deleting the playlist also removed its song rows.
 	var cnt int
-	err = recordDB.QueryRow(`SELECT count(*) FROM playlist_splits WHERE playlist_id = $1`, p.ID).Scan(&cnt)
+	err = recordDB.QueryRowContext(t.Context(), `SELECT count(*) FROM playlist_splits WHERE playlist_id = $1`, p.ID).Scan(&cnt)
 	require.NoError(t, err)
 	require.Zero(t, cnt)
 }
@@ -88,31 +88,31 @@ func TestPlaylistLifecycle(t *testing.T) {
 func TestPlaylistsViewRenders(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
-	recID, err := insertRecording("/tmp/render.mp3", "TestRadio", time.Now(), 123)
+	recID, err := insertRecording(t.Context(), "/tmp/render.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, insertSplit(Split{
+	require.NoError(t, insertSplit(t.Context(), Split{
 		RecordingID: recID, SourcePath: "/tmp/render.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/render/output_00000.mp3",
 	}))
-	splits, err := fetchSplitsForRecording(recID)
+	splits, err := fetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.NotEmpty(t, splits)
 
-	p, err := createPlaylist("Demo")
+	p, err := createPlaylist(t.Context(), "Demo")
 	require.NoError(t, err)
-	require.NoError(t, addSongToPlaylist(p.ID, splits[0].ID))
+	require.NoError(t, addSongToPlaylist(t.Context(), p.ID, splits[0].ID))
 
 	mux := routes()
 
@@ -153,34 +153,34 @@ func TestPlaylistsViewRenders(t *testing.T) {
 func TestRadioPlayback(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
 	// Two radios, each with a couple of splits.
 	for _, radio := range []string{"RadioA", "RadioB"} {
-		recID, err := insertRecording("/tmp/radio-"+radio+".mp3", radio, time.Now(), 123)
+		recID, err := insertRecording(t.Context(), "/tmp/radio-"+radio+".mp3", radio, time.Now(), 123)
 		require.NoError(t, err)
-		require.NoError(t, insertSplit(Split{
+		require.NoError(t, insertSplit(t.Context(), Split{
 			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
 			Index: 0, Start: 0, End: 100,
 			OutputPath: "split_music/" + radio + "/radio/output_00000.mp3",
 		}))
-		require.NoError(t, insertSplit(Split{
+		require.NoError(t, insertSplit(t.Context(), Split{
 			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
 			Index: 1, Start: 100, End: 200,
 			OutputPath: "split_music/" + radio + "/radio/output_00001.mp3",
 		}))
 	}
 
-	radios, err := fetchRadios()
+	radios, err := fetchRadios(t.Context())
 	require.NoError(t, err)
 	require.Len(t, radios, 2)
 	byName := map[string]int{}
@@ -191,7 +191,7 @@ func TestRadioPlayback(t *testing.T) {
 	require.Equal(t, 2, byName["RadioB"])
 
 	// Radio splits are random but limited to the queue size and only that radio.
-	splits, err := fetchRadioSplits("RadioA", 10)
+	splits, err := fetchRadioSplits(t.Context(), "RadioA", 10)
 	require.NoError(t, err)
 	require.Len(t, splits, 2)
 	for _, s := range splits {
@@ -235,23 +235,23 @@ func TestRadioPlayback(t *testing.T) {
 func TestStationsView(t *testing.T) {
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
 	// The stations view renders each station's recording state via the package
 	// recorder manager, which is normally initialized in main(). Tests must
 	// create one so the view does not dereference a nil manager.
 	recorderManager = NewRecorderSet(t.Context())
 
-	require.NoError(t, upsertRadioStations([]RadioStation{
+	require.NoError(t, upsertRadioStations(t.Context(), []RadioStation{
 		{StationUUID: "station-1", Name: "Alpha FM", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
 		{StationUUID: "station-2", Name: "Beta Radio", URLResolved: "https://b.example/stream", CountryCode: "DE", LanguageCodes: "ger"},
 	}))
@@ -303,7 +303,7 @@ func TestStationsView(t *testing.T) {
 	require.Contains(t, body, "station-star")
 	require.Contains(t, body, "station-1")
 
-	favs, err := fetchFavoriteUUIDs()
+	favs, err := fetchFavoriteUUIDs(t.Context())
 	require.NoError(t, err)
 	require.Contains(t, favs, "station-1")
 	require.NotContains(t, favs, "station-2")
@@ -327,7 +327,7 @@ func TestStationsView(t *testing.T) {
 	require.NotContains(t, body, "Alpha FM")
 	require.Contains(t, body, "No favorite stations yet.")
 
-	favs, err = fetchFavoriteUUIDs()
+	favs, err = fetchFavoriteUUIDs(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, favs)
 
@@ -355,7 +355,7 @@ func TestStationsView(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"favorited": false, "uuid": "station-1"}`, rec.Body.String())
 
-	favs, err = fetchFavoriteUUIDs()
+	favs, err = fetchFavoriteUUIDs(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, favs)
 }

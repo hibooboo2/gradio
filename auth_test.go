@@ -49,16 +49,16 @@ func resetAuthTables(t *testing.T) {
 	t.Helper()
 	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
 	require.NoError(t, admin.Close())
 
 	setRecordDBPath(testDBPath)
 	CreateDBHandle()
 
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 }
 
 // TestAuthRequired ensures requests without a basic-auth header are rejected.
@@ -83,7 +83,7 @@ func TestAuthCreatesUnknownUser(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	user, err := fetchUserByName(testUsername)
+	user, err := fetchUserByName(t.Context(), testUsername)
 	require.NoError(t, err)
 	require.Equal(t, testUsername, user.Name)
 	require.True(t, userPasswordMatches(user, testPassword))
@@ -92,7 +92,7 @@ func TestAuthCreatesUnknownUser(t *testing.T) {
 // TestAuthWrongPassword ensures a known user with a wrong password is rejected.
 func TestAuthWrongPassword(t *testing.T) {
 	resetAuthTables(t)
-	require.NoError(t, createUser(testUsername, testPassword))
+	require.NoError(t, createUser(t.Context(), testUsername, testPassword))
 	mux := routes()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/splits", nil)
@@ -107,7 +107,7 @@ func TestAuthWrongPassword(t *testing.T) {
 // is allowed through.
 func TestAuthKnownUserCorrectPassword(t *testing.T) {
 	resetAuthTables(t)
-	require.NoError(t, createUser(testUsername, testPassword))
+	require.NoError(t, createUser(t.Context(), testUsername, testPassword))
 	mux := routes()
 
 	req := authedRequest(t, http.MethodGet, "/api/splits", nil)

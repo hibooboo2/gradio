@@ -30,7 +30,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	if err != nil {
 		t.Skipf("test database unavailable: %v", err)
 	}
-	if _, err := admin.Exec(`CREATE DATABASE IF NOT EXISTS gradio_test`); err != nil {
+	if _, err := admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`); err != nil {
 		t.Skipf("test database unavailable: %v", err)
 	}
 	require.NoError(t, admin.Close())
@@ -39,14 +39,14 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	CreateDBHandle()
 
 	// Start from a clean slate so the test is hermetic and deterministic.
-	_, err = recordDB.Exec(`DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = recordDB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
-	require.NoError(t, createSchema(recordDB))
+	require.NoError(t, createSchema(t.Context(), recordDB))
 
 	// Seed real stations so RecordOnce has live streams to hit.
 	seedTestStations(t)
 
-	stations, err := fetchRadioStations()
+	stations, err := fetchRadioStations(t.Context())
 	require.NoError(t, err)
 
 	// Pick up to 5 stations with a resolvable URL (deduped by name so two
@@ -185,7 +185,7 @@ func seedTestStations(t *testing.T) {
 				})
 			}
 			if len(stations) > 0 {
-				require.NoError(t, upsertRadioStations(stations))
+				require.NoError(t, upsertRadioStations(t.Context(), stations))
 				t.Logf("seeded %d stations from initstations_james.json", len(stations))
 				return
 			}
@@ -193,7 +193,7 @@ func seedTestStations(t *testing.T) {
 	}
 
 	// Fallback: the two known-good default streams.
-	require.NoError(t, upsertRadioStations([]RadioStation{
+	require.NoError(t, upsertRadioStations(t.Context(), []RadioStation{
 		{StationUUID: "default-1", Name: "GayPHXRadio", URLResolved: streamURL},
 		{StationUUID: "default-2", Name: "RandomRadio", URLResolved: streamURL2},
 	}))
