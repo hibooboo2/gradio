@@ -1,8 +1,8 @@
-.PHONY: run build play docker-db
+.PHONY: run build play docker-db clean_data
 
 COCKROACH_IMAGE ?= cockroachdb/cockroach:latest
 COCKROACH_CONTAINER ?= gradio-cockroach
-COCKROACH_PORT ?= 26257
+COCKROACH_PORT ?= 59786
 COCKROACH_VOLUME ?= gradio-cockroach-data
 
 docker-db:
@@ -31,7 +31,7 @@ docker-db:
 
 run: docker-db
 	go build -o gradio
-	./gradio -http 8000 -watch
+	DATABASE_URL=postgres://root@localhost:$(COCKROACH_PORT)/defaultdb?sslmode=disable ./gradio -http 8000 -watch -record
 
 build:
 	GOOS=windows go build -o gradio
@@ -39,3 +39,9 @@ build:
 play: docker-db
 	go build -o gradio
 	./gradio -play
+
+clean_data:
+	@echo "Cleaning mp3s <1MB in ./recordings and ./split_music..."
+	@find ./recordings ./split_music -type f -name "*.mp3" -size -1M -print -exec sh -c 'dir=$$(dirname "$$1"); rm -f "$$1"; if [ -z "$$(ls -A "$$dir" 2>/dev/null)" ]; then echo "Removing empty directory: $$dir"; rmdir "$$dir" 2>/dev/null || true; fi' _ {} \; 2>/dev/null || true
+	@find ./recordings ./split_music -mindepth 1 -type d -empty -delete 2>/dev/null || true
+	@echo "clean_data complete."

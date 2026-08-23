@@ -152,7 +152,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 	// db := memoizeDBHandle()
 	if memoizeDB != nil {
 		var data string
-		err := memoizeDB.QueryRowContext(ctx, 
+		err := memoizeDB.QueryRowContext(ctx,
 			`SELECT result FROM memoize WHERE op = $1 AND input = $2`,
 			opName(f), inputPath,
 		).Scan(&data)
@@ -182,7 +182,7 @@ func Memoize[Val any, op func(context.Context, string) (Val, error)](ctx context
 			return result, nil
 		}
 
-		if _, err := memoizeDB.ExecContext(ctx, 
+		if _, err := memoizeDB.ExecContext(ctx,
 			`INSERT INTO memoize (op, input, result) VALUES ($1, $2, $3)
 			 ON CONFLICT(op, input) DO UPDATE SET result = excluded.result`,
 			opName(f), inputPath, string(data),
@@ -236,6 +236,7 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return fmt.Errorf("failed to store recording status: %w", err)
 	}
+	slog.InfoContext(ctx, "Split stream for file", "file", fname)
 	return nil
 }
 
@@ -362,7 +363,7 @@ func nextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, e
 	}
 
 	var maxPos sql.NullInt64
-	if err := recordDB.QueryRowContext(ctx, 
+	if err := recordDB.QueryRowContext(ctx,
 		`SELECT MAX(position) FROM splits WHERE recording_id = $1`,
 		recordingID,
 	).Scan(&maxPos); err != nil {

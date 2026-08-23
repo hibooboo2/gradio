@@ -1,6 +1,6 @@
 module github.com/hibooboo2/gradio
 
-go 1.26.6
+go 1.27
 
 require (
 	github.com/faiface/beep v1.1.0
