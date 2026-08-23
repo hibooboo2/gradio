@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -95,11 +96,10 @@ func contentID(parts ...string) int64 {
 	return int64(binary.LittleEndian.Uint64(sum[:8]) & 0x7fffffffffffffff)
 }
 
-// recordingID derives a recording's primary key from its source file name and
-// size. The same file maps to the same row every time it is seen; a re-recorded
-// file with a different size becomes a distinct recording.
-func recordingID(sourcePath string, sizeBytes int64) int64 {
-	return contentID(sourcePath, strconv.FormatInt(sizeBytes, 10))
+// recordingID derives a recording's primary key from its source file name. The
+// same file maps to the same row every time it is seen, regardless of size.
+func recordingID(sourcePath string) int64 {
+	return contentID(sourcePath)
 }
 
 // splitID derives a split's primary key from its source file name and the
@@ -280,6 +280,12 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			stationuuid  STRING PRIMARY KEY REFERENCES radio_stations(stationuuid) ON DELETE CASCADE,
 			favorited_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+
+		CREATE TABLE IF NOT EXISTS settings (
+			key        STRING PRIMARY KEY,
+			value      JSONB NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	if err != nil {
 		return err
@@ -292,21 +298,99 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
+// SetSetting stores a value under the given key in the settings table. The
+// value is JSON-marshaled before being written, so any JSON-serializable type
+// can be stored. Setting an existing key replaces its value in place.
+func SetSetting[T any](ctx context.Context, key string, value T) error {
+	if recordDB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal setting %q: %w", key, err)
+	}
+
+	_, err = recordDB.ExecContext(ctx,
+		`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::JSONB, now())
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()`,
+		key, string(data),
+	)
+	if err != nil {
+		return fmt.Errorf("set setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// GetSetting reads a value from the settings table and unmarshals it into T.
+// It returns sql.ErrNoRows when the key has not been set; the caller decides
+// how to handle a missing key.
+func GetSetting[T any](ctx context.Context, key string) (T, error) {
+	var zero T
+	if recordDB == nil {
+		return zero, fmt.Errorf("nil db")
+	}
+
+	var raw []byte
+	err := recordDB.QueryRowContext(ctx,
+		`SELECT value FROM settings WHERE key = $1`,
+		key,
+	).Scan(&raw)
+	if err != nil {
+		return zero, err
+	}
+
+	if err := json.Unmarshal(raw, &zero); err != nil {
+		return zero, fmt.Errorf("unmarshal setting %q: %w", key, err)
+	}
+	return zero, nil
+}
+
+// GetSettingOrDefault reads a value from the settings table, returning def when
+// the key has not been set.
+func GetSettingOrDefault[T any](ctx context.Context, key string, def T) (T, error) {
+	v, err := GetSetting[T](ctx, key)
+	if err == sql.ErrNoRows {
+		return def, nil
+	}
+	if err != nil {
+		return def, err
+	}
+	return v, nil
+}
+
+// MaxDownloadsKey is the settings key for the maximum number of concurrent
+// music file downloads. A value of 0 (or a missing key) means unlimited.
+const MaxDownloadsKey = "max_downloads"
+
+// GetMaxDownloads returns the configured maximum number of concurrent music
+// downloads. A missing or zero value means unlimited.
+func GetMaxDownloads(ctx context.Context) (int, error) {
+	max, err := GetSetting[int](ctx, MaxDownloadsKey)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return max, nil
+}
+
 // insertRecording records that a source file was produced and saved by the
-// recorder. The id is a hash of the source path and file size, so re-seeing the
-// same file returns the same id instead of creating a duplicate row. A file
-// that was re-recorded with a different size is a distinct recording.
+// recorder. The id is a hash of the source path only, so re-seeing the same
+// file returns the same id regardless of size, enabling deterministic
+// re-processing instead of creating a duplicate row.
 func insertRecording(ctx context.Context, sourcePath, radio string, recordedAt time.Time, sizeBytes int64) (int64, error) {
 	if recordDB == nil {
 		return 0, fmt.Errorf("nil db")
 	}
 
-	id := recordingID(sourcePath, sizeBytes)
+	id := recordingID(sourcePath)
 
 	var existing int64
 	err := recordDB.QueryRowContext(ctx, 
-		`SELECT id FROM recordings WHERE source_path = $1 AND size_bytes = $2`,
-		sourcePath, sizeBytes,
+		`SELECT id FROM recordings WHERE source_path = $1`,
+		sourcePath,
 	).Scan(&existing)
 	switch {
 	case err == nil:

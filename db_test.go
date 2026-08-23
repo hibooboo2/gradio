@@ -13,13 +13,12 @@ import (
 const testDBPath = "postgres://root@localhost:26257/gradio_test?sslmode=disable"
 
 func TestContentIDs(t *testing.T) {
-	// Recording ids are a deterministic, positive hash of path + size.
-	r1 := recordingID("/radio/file.mp3", 100)
-	r2 := recordingID("/radio/file.mp3", 100)
+	// Recording ids are a deterministic, positive hash of path.
+	r1 := recordingID("/radio/file.mp3")
+	r2 := recordingID("/radio/file.mp3")
 	require.Equal(t, r1, r2)
 	require.Positive(t, r1)
-	require.NotEqual(t, r1, recordingID("/radio/file.mp3", 200))
-	require.NotEqual(t, r1, recordingID("/radio/other.mp3", 100))
+	require.NotEqual(t, r1, recordingID("/radio/other.mp3"))
 
 	// Split ids are a deterministic hash of path + start/end boundaries.
 	s1 := splitID("/radio/file.mp3", 10.5, 30.25)
@@ -56,7 +55,7 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	id, err := insertRecording(t.Context(), sourcePath, radio, recordedAt, 12345)
 	require.NoError(t, err)
 	require.NotZero(t, id)
-	require.Equal(t, recordingID(sourcePath, 12345), id, "id is a hash of the source path and size")
+	require.Equal(t, recordingID(sourcePath), id, "id is a hash of the source path")
 
 	// Re-inserting the same file (same path and size) returns the same id
 	// instead of creating a duplicate row.
@@ -64,11 +63,12 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, id, id2)
 
-	// A re-recorded file with a different size is a distinct recording.
+	// A re-recorded file with a different size maps to the same recording (id
+	// is path-only).
 	id3, err := insertRecording(t.Context(), sourcePath, radio, recordedAt, 99999)
 	require.NoError(t, err)
-	require.NotEqual(t, id, id3)
-	require.Equal(t, recordingID(sourcePath, 99999), id3)
+	require.Equal(t, id, id3, "same source_path with different size must return same deterministic id")
+	require.Equal(t, recordingID(sourcePath), id3)
 
 	pending, err := fetchPendingRecordings(t.Context())
 	require.NoError(t, err)
