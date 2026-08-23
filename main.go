@@ -329,7 +329,7 @@ func main() {
 	// Populate the recording urls from the radio_stations table. When the
 	// table is empty on first run, load the stations from initstations.json so
 	// all stations are available; otherwise the last sync is reused.
-	stations, err := fetchRadioStations()
+	stations, err := fetchRadioStations(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "load radio stations", "err", err)
 	} else if len(stations) == 0 {
@@ -389,7 +389,7 @@ func main() {
 	}
 
 	if *record {
-		stations, err := fetchRadioStationURLs()
+		stations, err := fetchRadioStationURLs(ctx)
 		if err == nil {
 			for name, url := range stations {
 				rec := &Recorder{
@@ -446,12 +446,12 @@ type Recorder struct {
 // recordFileToDB marks a just-saved recording file as available for splitting.
 // It is called with r.mu held whenever a file has been fully written and
 // closed (rotated out or shut down).
-func (r *Recorder) recordFileToDB(fullName string, started time.Time, size int64) {
+func (r *Recorder) recordFileToDB(ctx context.Context, fullName string, started time.Time, size int64) {
 	if fullName == "" {
 		return
 	}
 
-	if _, err := insertRecording(fullName, r.radioName, started, size); err != nil {
+	if _, err := insertRecording(ctx, fullName, r.radioName, started, size); err != nil {
 		slog.Error("record to db", "filename", fullName, "err", err)
 		return
 	}
@@ -586,7 +586,7 @@ func (r *Recorder) storeToDisk() bool {
 			slog.Error("stat closed recording ", "fileName", r.filename, "err", err)
 		} else {
 			slog.Info("Recording to db", "name", r.filename, "size", info.Size())
-			r.recordFileToDB(r.filename, r.started, info.Size())
+			r.recordFileToDB(context.Background(), r.filename, r.started, info.Size())
 			return true
 		}
 	}
@@ -660,7 +660,7 @@ func watchAndSplit(ctx context.Context) {
 }
 
 func processPendingRecordings(ctx context.Context) {
-	recs, err := fetchPendingRecordings()
+	recs, err := fetchPendingRecordings(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "fetch pending recordings", "err", err)
 		return
@@ -673,20 +673,20 @@ func processPendingRecordings(ctx context.Context) {
 
 		slog.InfoContext(ctx, "processing recording", "id", rec.ID, "source", rec.SourcePath, "radio", rec.Radio)
 
-		if err := setRecordingStatus(rec.ID, StatusProcessing); err != nil {
+		if err := setRecordingStatus(ctx, rec.ID, StatusProcessing); err != nil {
 			slog.ErrorContext(ctx, "mark recording processing", "err", err, "id", rec.ID)
 			continue
 		}
 
 		if err := splitRecording(ctx, rec); err != nil {
 			slog.ErrorContext(ctx, "split recording failed", "err", err, "id", rec.ID, "source", rec.SourcePath)
-			if serr := setRecordingStatus(rec.ID, StatusError); serr != nil {
+			if serr := setRecordingStatus(ctx, rec.ID, StatusError); serr != nil {
 				slog.ErrorContext(ctx, "mark recording error", "err", serr, "id", rec.ID)
 			}
 			continue
 		}
 
-		if err := setRecordingStatus(rec.ID, StatusProcessed); err != nil {
+		if err := setRecordingStatus(ctx, rec.ID, StatusProcessed); err != nil {
 			slog.ErrorContext(ctx, "mark recording processed", "err", err, "id", rec.ID)
 		}
 
@@ -719,7 +719,7 @@ func PlayStream(ctx context.Context) {
 }
 
 func playOnce(ctx context.Context) error {
-	stations, err := fetchRadioStations()
+	stations, err := fetchRadioStations(ctx)
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,

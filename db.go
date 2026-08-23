@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
@@ -146,13 +147,13 @@ func isHexHash(s string) bool {
 // station name by looking it up in the recordings table. When dir is not a
 // hash, or the lookup fails, dir is returned unchanged so legacy (un-hashed)
 // paths keep working.
-func radioDisplayName(dir string) string {
+func radioDisplayName(ctx context.Context, dir string) string {
 	if !isHexHash(dir) || recordDB == nil {
 		return dir
 	}
 
 	var radio string
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT radio FROM recordings WHERE source_path LIKE $1 LIMIT 1`,
 		"%"+dir+"/%",
 	).Scan(&radio)
@@ -181,7 +182,7 @@ func CreateDBHandle() *sql.DB {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 
-	if err := createSchema(db); err != nil {
+	if err := createSchema(context.Background(), db); err != nil {
 		slog.Error("recordings: create tables", "err", err)
 		os.Exit(1)
 		return nil
@@ -194,8 +195,8 @@ func CreateDBHandle() *sql.DB {
 // createSchema ensures the recordings and splits tables (and their indexes)
 // exist. It is safe to call multiple times and is re-used by tests to reset a
 // clean schema after dropping tables.
-func createSchema(db *sql.DB) error {
-	_, err := db.Exec(`
+func createSchema(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS recordings (
 			id          INT PRIMARY KEY,
 			source_path STRING NOT NULL,
@@ -287,7 +288,7 @@ func createSchema(db *sql.DB) error {
 	// Migration for databases created before custom_title existed. Fresh
 	// databases already have the column from the CREATE TABLE above, so this
 	// is a no-op for them.
-	_, err = db.Exec(`ALTER TABLE splits ADD COLUMN IF NOT EXISTS custom_title STRING NOT NULL DEFAULT ''`)
+	_, err = db.ExecContext(ctx, `ALTER TABLE splits ADD COLUMN IF NOT EXISTS custom_title STRING NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -295,7 +296,7 @@ func createSchema(db *sql.DB) error {
 // recorder. The id is a hash of the source path and file size, so re-seeing the
 // same file returns the same id instead of creating a duplicate row. A file
 // that was re-recorded with a different size is a distinct recording.
-func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes int64) (int64, error) {
+func insertRecording(ctx context.Context, sourcePath, radio string, recordedAt time.Time, sizeBytes int64) (int64, error) {
 	if recordDB == nil {
 		return 0, fmt.Errorf("nil db")
 	}
@@ -303,7 +304,7 @@ func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes i
 	id := recordingID(sourcePath, sizeBytes)
 
 	var existing int64
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT id FROM recordings WHERE source_path = $1 AND size_bytes = $2`,
 		sourcePath, sizeBytes,
 	).Scan(&existing)
@@ -314,7 +315,7 @@ func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes i
 		return 0, err
 	}
 
-	_, err = recordDB.Exec(
+	_, err = recordDB.ExecContext(ctx, 
 		`INSERT INTO recordings (id, source_path, radio, recorded_at, size_bytes)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -329,12 +330,12 @@ func insertRecording(sourcePath, radio string, recordedAt time.Time, sizeBytes i
 
 // fetchPendingRecordings returns recordings that still need to be split,
 // oldest first.
-func fetchPendingRecordings() ([]Recording, error) {
+func fetchPendingRecordings(ctx context.Context) ([]Recording, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE status = $1 OR status = $2
@@ -363,24 +364,24 @@ func fetchPendingRecordings() ([]Recording, error) {
 }
 
 // setRecordingStatus updates the pipeline status of a source recording.
-func setRecordingStatus(id int64, status RecordingStatus) error {
+func setRecordingStatus(ctx context.Context, id int64, status RecordingStatus) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := recordDB.Exec(`UPDATE recordings SET status = $1 WHERE id = $2`, status, id)
+	_, err := recordDB.ExecContext(ctx, `UPDATE recordings SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
 
 // markRecordingSplit records that a source recording has been fully split and
 // where its output files were written. It is idempotent: re-running on the same
 // recording just refreshes the stored folder.
-func markRecordingSplit(recordingID int64, splitFolder string) error {
+func markRecordingSplit(ctx context.Context, recordingID int64, splitFolder string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO recording_splits (recording_id, split_folder) VALUES ($1, $2)
 		 ON CONFLICT (recording_id) DO UPDATE SET split_folder = excluded.split_folder`,
 		recordingID, splitFolder,
@@ -391,12 +392,12 @@ func markRecordingSplit(recordingID int64, splitFolder string) error {
 // recordingSplitFolder returns the folder a recording's splits were written
 // to, and whether the recording has been split (done). done is false when the
 // recording has no row in the recording_splits table.
-func recordingSplitFolder(recordingID int64) (folder string, done bool, err error) {
+func recordingSplitFolder(ctx context.Context, recordingID int64) (folder string, done bool, err error) {
 	if recordDB == nil {
 		return "", false, fmt.Errorf("nil db")
 	}
 
-	err = recordDB.QueryRow(
+	err = recordDB.QueryRowContext(ctx, 
 		`SELECT split_folder FROM recording_splits WHERE recording_id = $1`,
 		recordingID,
 	).Scan(&folder)
@@ -413,7 +414,7 @@ func recordingSplitFolder(recordingID int64) (folder string, done bool, err erro
 // The id is a hash of the source file name and the split's boundaries (start
 // and end in the source stream), so re-processing the same recording produces
 // the same split ids.
-func insertSplit(s Split) error {
+func insertSplit(ctx context.Context, s Split) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -422,7 +423,7 @@ func insertSplit(s Split) error {
 		s.ID = splitID(s.SourcePath, s.Start, s.End)
 	}
 
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO splits (id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -434,12 +435,12 @@ func insertSplit(s Split) error {
 // fetchSplitsForRecording returns the split files for a source recording in
 // their original stream order. Files are adjacent in the original stream when
 // their Index values are consecutive.
-func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
+func fetchSplitsForRecording(ctx context.Context, recordingID int64) ([]Split, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE recording_id = $1
@@ -465,12 +466,12 @@ func fetchSplitsForRecording(recordingID int64) ([]Split, error) {
 
 // fetchAllSplits returns every split, newest recording first, joined with the
 // radio name of the source recording for convenient display.
-func fetchAllSplits() ([]Split, error) {
+func fetchAllSplits(ctx context.Context) ([]Split, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title
 		 FROM splits s
 		 ORDER BY s.created_at DESC, s.id`,
@@ -493,13 +494,13 @@ func fetchAllSplits() ([]Split, error) {
 }
 
 // fetchSplit returns a single split by id, or an error when it does not exist.
-func fetchSplit(id int64) (Split, error) {
+func fetchSplit(ctx context.Context, id int64) (Split, error) {
 	if recordDB == nil {
 		return Split{}, fmt.Errorf("nil db")
 	}
 
 	var s Split
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE id = $1`,
@@ -513,12 +514,12 @@ func fetchSplit(id int64) (Split, error) {
 }
 
 // updateSplit persists changes to a split's boundaries and classification.
-func updateSplit(s Split) error {
+func updateSplit(ctx context.Context, s Split) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`UPDATE splits
 		 SET start_seconds = $1, end_seconds = $2, classification = $3, custom_title = $4
 		 WHERE id = $5`,
@@ -528,14 +529,14 @@ func updateSplit(s Split) error {
 }
 
 // fetchRecordingByPath returns the recording row for a source file.
-func fetchRecordingByPath(sourcePath string) (Recording, error) {
+func fetchRecordingByPath(ctx context.Context, sourcePath string) (Recording, error) {
 	if recordDB == nil {
 		return Recording{}, fmt.Errorf("nil db")
 	}
 
 	var r Recording
 	var recordedAt string
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE source_path = $1`,
@@ -552,14 +553,14 @@ func fetchRecordingByPath(sourcePath string) (Recording, error) {
 }
 
 // fetchRecordingByID returns the recording row for a recording id.
-func fetchRecordingByID(id int64) (Recording, error) {
+func fetchRecordingByID(ctx context.Context, id int64) (Recording, error) {
 	if recordDB == nil {
 		return Recording{}, fmt.Errorf("nil db")
 	}
 
 	var r Recording
 	var recordedAt string
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE id = $1`,
@@ -576,12 +577,12 @@ func fetchRecordingByID(id int64) (Recording, error) {
 }
 
 // fetchAllRecordings returns every recording, newest first.
-func fetchAllRecordings() ([]Recording, error) {
+func fetchAllRecordings(ctx context.Context) ([]Recording, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 ORDER BY created_at DESC, id`,
@@ -617,12 +618,12 @@ type Radio struct {
 // fetchRadios returns the distinct radios that have at least one split, with
 // their split counts, ordered by name. The radio name comes from the
 // recordings table, which is set when a source stream is saved.
-func fetchRadios() ([]Radio, error) {
+func fetchRadios(ctx context.Context) ([]Radio, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT r.radio, count(s.id)
 		 FROM recordings r
 		 JOIN splits s ON s.recording_id = r.id
@@ -648,12 +649,12 @@ func fetchRadios() ([]Radio, error) {
 
 // fetchRadioSplits returns up to limit random splits belonging to the given
 // radio, in random order, so a radio can be "played" as a shuffled queue.
-func fetchRadioSplits(radio string, limit int) ([]Split, error) {
+func fetchRadioSplits(ctx context.Context, radio string, limit int) ([]Split, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
@@ -686,7 +687,7 @@ func fetchRadioSplits(radio string, limit int) ([]Split, error) {
 // repeated shuffles keep surfacing music the user has not heard yet. Splits
 // marked as commercials or re_split are skipped, as are any splits whose ids
 // appear in exclude (already played in the current shuffle session).
-func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
+func fetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([]Split, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -705,7 +706,7 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 		excludeArg = "{" + strings.Join(parts, ",") + "}"
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
@@ -735,12 +736,12 @@ func fetchGlobalShuffleBatch(limit int, exclude []int64) ([]Split, error) {
 // recordPlay increments the play counter for a split, inserting a row the
 // first time it is heard. Every play also appends a row to the play_history
 // table so the history view can show what was played and when.
-func recordPlay(splitID int64) error {
+func recordPlay(ctx context.Context, splitID int64) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO song_plays (split_id, plays) VALUES ($1, 1)
 		 ON CONFLICT (split_id) DO UPDATE SET plays = song_plays.plays + 1, updated_at = now()`,
 		splitID,
@@ -749,18 +750,18 @@ func recordPlay(splitID int64) error {
 		return err
 	}
 
-	return insertPlayHistory(splitID)
+	return insertPlayHistory(ctx, splitID)
 }
 
 // insertPlayHistory appends one row to the play_history table recording that a
 // split was played at the current time. Every play event gets its own row so
 // the history can later be aggregated by frequency or recency.
-func insertPlayHistory(splitID int64) error {
+func insertPlayHistory(ctx context.Context, splitID int64) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO play_history (split_id) VALUES ($1)`,
 		splitID,
 	)
@@ -770,7 +771,7 @@ func insertPlayHistory(splitID int64) error {
 // setRating records a like or dislike for a split. A like (wasLiked=true)
 // increments the rating counter and a dislike (wasLiked=false) decrements it.
 // Existing play counts are preserved.
-func setRating(splitID int64, wasLiked bool) error {
+func setRating(ctx context.Context, splitID int64, wasLiked bool) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -779,7 +780,7 @@ func setRating(splitID int64, wasLiked bool) error {
 	if !wasLiked {
 		delta = -1
 	}
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 0, $2)
 		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + $2, updated_at = now()`,
 		splitID, delta,
@@ -789,12 +790,12 @@ func setRating(splitID int64, wasLiked bool) error {
 
 // fetchSongStats returns the play count and rating (like count) for a split,
 // or zero values when the split has never been played or rated.
-func fetchSongStats(splitID int64) (plays int, rating int, err error) {
+func fetchSongStats(ctx context.Context, splitID int64) (plays int, rating int, err error) {
 	if recordDB == nil {
 		return 0, 0, fmt.Errorf("nil db")
 	}
 
-	err = recordDB.QueryRow(
+	err = recordDB.QueryRowContext(ctx, 
 		`SELECT plays, rating FROM song_plays WHERE split_id = $1`,
 		splitID,
 	).Scan(&plays, &rating)
@@ -866,12 +867,12 @@ func scanHistoryRows(rows *sql.Rows) ([]HistoryEntry, error) {
 // fetchPlayHistoryRecency returns the distinct songs in the play history,
 // ordered by when they were last played (most recent first), limited to limit
 // entries.
-func fetchPlayHistoryRecency(limit int) ([]HistoryEntry, error) {
+func fetchPlayHistoryRecency(ctx context.Context, limit int) ([]HistoryEntry, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(historySelect+`
+	rows, err := recordDB.QueryContext(ctx, historySelect+`
 		ORDER BY last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -884,12 +885,12 @@ func fetchPlayHistoryRecency(limit int) ([]HistoryEntry, error) {
 // fetchPlayHistoryFrequency returns the distinct songs in the play history,
 // ordered by how often they were played (most played first), with the most
 // recently played song winning ties. Limited to limit entries.
-func fetchPlayHistoryFrequency(limit int) ([]HistoryEntry, error) {
+func fetchPlayHistoryFrequency(ctx context.Context, limit int) ([]HistoryEntry, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(historySelect+`
+	rows, err := recordDB.QueryContext(ctx, historySelect+`
 		ORDER BY plays DESC, last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -901,12 +902,12 @@ func fetchPlayHistoryFrequency(limit int) ([]HistoryEntry, error) {
 
 // fetchPlayHistoryGrouped returns the play history grouped by radio, ordered by
 // radio name then play count. Limited to limit entries total.
-func fetchPlayHistoryGrouped(limit int) ([]RadioHistoryGroup, error) {
+func fetchPlayHistoryGrouped(ctx context.Context, limit int) ([]RadioHistoryGroup, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(historySelect+`
+	rows, err := recordDB.QueryContext(ctx, historySelect+`
 		ORDER BY r.radio ASC, plays DESC, last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -949,13 +950,13 @@ type User struct {
 
 // fetchUserByName returns the user with the given name, or sql.ErrNoRows when
 // no such user exists.
-func fetchUserByName(name string) (User, error) {
+func fetchUserByName(ctx context.Context, name string) (User, error) {
 	if recordDB == nil {
 		return User{}, fmt.Errorf("nil db")
 	}
 
 	var u User
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT id, name, password FROM users WHERE name = $1`,
 		name,
 	).Scan(&u.ID, &u.Name, &u.Password)
@@ -968,7 +969,7 @@ func fetchUserByName(name string) (User, error) {
 // createUser stores a new user with the given name and password. The password
 // is bcrypt-hashed before being written. It is an error if a user with the
 // same name already exists (the name column is unique).
-func createUser(name, password string) error {
+func createUser(ctx context.Context, name, password string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -978,7 +979,7 @@ func createUser(name, password string) error {
 		return err
 	}
 
-	_, err = recordDB.Exec(
+	_, err = recordDB.ExecContext(ctx, 
 		`INSERT INTO users (name, password) VALUES ($1, $2)`,
 		name, string(hash),
 	)
@@ -1006,7 +1007,7 @@ type RadioStation struct {
 // upsertRadioStations inserts or refreshes the given radio stations in bulk.
 // The stationuuid is the primary key, so re-syncing the same station replaces
 // its metadata instead of creating a duplicate row.
-func upsertRadioStations(stations []RadioStation) error {
+func upsertRadioStations(ctx context.Context, stations []RadioStation) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -1035,17 +1036,17 @@ func upsertRadioStations(stations []RadioStation) error {
 		countrycode = excluded.countrycode,
 		languagecodes = excluded.languagecodes`)
 
-	_, err := recordDB.Exec(sb.String(), args...)
+	_, err := recordDB.ExecContext(ctx, sb.String(), args...)
 	return err
 }
 
 // fetchRadioStations returns every station in the radio_stations table.
-func fetchRadioStations() ([]RadioStation, error) {
+func fetchRadioStations(ctx context.Context) ([]RadioStation, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 			FROM radio_stations
 			order by random()
@@ -1071,8 +1072,8 @@ func fetchRadioStations() ([]RadioStation, error) {
 
 // fetchRadioStationURLs returns every station url_resolved keyed by its name,
 // so recording can pick a station by name.
-func fetchRadioStationURLs() (map[string]string, error) {
-	stations, err := fetchRadioStations()
+func fetchRadioStationURLs(ctx context.Context) (map[string]string, error) {
+	stations, err := fetchRadioStations(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1089,13 +1090,13 @@ func fetchRadioStationURLs() (map[string]string, error) {
 
 // fetchRadioStationByUUID returns the station with the given uuid, or
 // sql.ErrNoRows when it does not exist.
-func fetchRadioStationByUUID(uuid string) (RadioStation, error) {
+func fetchRadioStationByUUID(ctx context.Context, uuid string) (RadioStation, error) {
 	if recordDB == nil {
 		return RadioStation{}, fmt.Errorf("nil db")
 	}
 
 	var s RadioStation
-	err := recordDB.QueryRow(
+	err := recordDB.QueryRowContext(ctx, 
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 		 FROM radio_stations
 		 WHERE stationuuid = $1`,
@@ -1109,11 +1110,11 @@ func fetchRadioStationByUUID(uuid string) (RadioStation, error) {
 
 // addFavorite marks a station as a favorite. It is idempotent: re-favoriting
 // an already-favorited station keeps the original favorited_at time.
-func addFavorite(stationuuid string) error {
+func addFavorite(ctx context.Context, stationuuid string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
-	_, err := recordDB.Exec(
+	_, err := recordDB.ExecContext(ctx, 
 		`INSERT INTO favorites (stationuuid) VALUES ($1)
 		 ON CONFLICT (stationuuid) DO NOTHING`,
 		stationuuid,
@@ -1123,21 +1124,21 @@ func addFavorite(stationuuid string) error {
 
 // removeFavorite unmarks a station as a favorite. It is a no-op when the
 // station was not favorited.
-func removeFavorite(stationuuid string) error {
+func removeFavorite(ctx context.Context, stationuuid string) error {
 	if recordDB == nil {
 		return fmt.Errorf("nil db")
 	}
-	_, err := recordDB.Exec(`DELETE FROM favorites WHERE stationuuid = $1`, stationuuid)
+	_, err := recordDB.ExecContext(ctx, `DELETE FROM favorites WHERE stationuuid = $1`, stationuuid)
 	return err
 }
 
 // fetchFavoriteUUIDs returns the set of station uuids that are favorited.
-func fetchFavoriteUUIDs() (map[string]struct{}, error) {
+func fetchFavoriteUUIDs(ctx context.Context) (map[string]struct{}, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(`SELECT stationuuid FROM favorites`)
+	rows, err := recordDB.QueryContext(ctx, `SELECT stationuuid FROM favorites`)
 	if err != nil {
 		return nil, err
 	}
@@ -1156,12 +1157,12 @@ func fetchFavoriteUUIDs() (map[string]struct{}, error) {
 
 // fetchFavoriteStations returns the favorited stations, ordered by when they
 // were favorited, newest first.
-func fetchFavoriteStations() ([]RadioStation, error) {
+func fetchFavoriteStations(ctx context.Context) ([]RadioStation, error) {
 	if recordDB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := recordDB.Query(
+	rows, err := recordDB.QueryContext(ctx, 
 		`SELECT s.stationuuid, s.name, s.url_resolved, s.favicon, s.tags, s.countrycode, s.languagecodes
 		 FROM favorites f
 		 JOIN radio_stations s ON s.stationuuid = f.stationuuid

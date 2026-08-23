@@ -136,14 +136,14 @@ type stationsViewData struct {
 // handleStationsView renders the Radio Stations tab fragment listing every
 // station in the radio_stations table with its current recording state.
 func handleStationsView(w http.ResponseWriter, r *http.Request) {
-	stations, err := fetchRadioStations()
+	stations, err := fetchRadioStations(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list radio stations", "err", err)
 		http.Error(w, "failed to load radio stations", http.StatusInternalServerError)
 		return
 	}
 
-	favs, err := fetchFavoriteUUIDs()
+	favs, err := fetchFavoriteUUIDs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorites", "err", err)
 		http.Error(w, "failed to load favorites", http.StatusInternalServerError)
@@ -173,7 +173,7 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 // handleFavoritesView renders the Favorites tab fragment listing only the
 // stations that have been favorited.
 func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
-	stations, err := fetchFavoriteStations()
+	stations, err := fetchFavoriteStations(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorite stations", "err", err)
 		http.Error(w, "failed to load favorite stations", http.StatusInternalServerError)
@@ -206,7 +206,7 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 // came from (?view=stations or ?view=favorites) for non-JS fallback.
 func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
-	if _, err := fetchRadioStationByUUID(uuid); err != nil {
+	if _, err := fetchRadioStationByUUID(r.Context(), uuid); err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
 			return
@@ -216,7 +216,7 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	favs, err := fetchFavoriteUUIDs()
+	favs, err := fetchFavoriteUUIDs(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list favorites", "err", err)
 		http.Error(w, "failed to load favorites", http.StatusInternalServerError)
@@ -225,9 +225,9 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 
 	_, wasFavorited := favs[uuid]
 	if wasFavorited {
-		err = removeFavorite(uuid)
+		err = removeFavorite(r.Context(), uuid)
 	} else {
-		err = addFavorite(uuid)
+		err = addFavorite(r.Context(), uuid)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "toggle favorite", "err", err, "uuid", uuid)
@@ -291,7 +291,7 @@ func wantsJSON(r *http.Request) bool {
 // from. Otherwise it renders the player for the songs recorded so far, or a
 // friendly message when the station has no recorded songs yet.
 func handleStationRecord(w http.ResponseWriter, r *http.Request) {
-	station, err := fetchRadioStationByUUID(r.PathValue("uuid"))
+	station, err := fetchRadioStationByUUID(r.Context(), r.PathValue("uuid"))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
@@ -331,7 +331,7 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	splits, err := fetchRadioSplits(station.Name, radioQueueSize)
+	splits, err := fetchRadioSplits(r.Context(), station.Name, radioQueueSize)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", station.Name)
 		http.Error(w, "failed to load radio", http.StatusInternalServerError)

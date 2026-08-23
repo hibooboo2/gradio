@@ -135,11 +135,11 @@ func handleHistoryView(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if group {
-		groups, err = fetchPlayHistoryGrouped(limit)
+		groups, err = fetchPlayHistoryGrouped(r.Context(), limit)
 	} else if sort == "frequency" {
-		entries, err = fetchPlayHistoryFrequency(limit)
+		entries, err = fetchPlayHistoryFrequency(r.Context(), limit)
 	} else {
-		entries, err = fetchPlayHistoryRecency(limit)
+		entries, err = fetchPlayHistoryRecency(r.Context(), limit)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "load play history", "err", err)
@@ -174,7 +174,7 @@ func handleHistoryJSON(w http.ResponseWriter, r *http.Request) {
 	sort, group, limit := historyParams(r)
 
 	if group {
-		groups, err := fetchPlayHistoryGrouped(limit)
+		groups, err := fetchPlayHistoryGrouped(r.Context(), limit)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "play history json", "err", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -187,9 +187,9 @@ func handleHistoryJSON(w http.ResponseWriter, r *http.Request) {
 	var entries []HistoryEntry
 	var err error
 	if sort == "frequency" {
-		entries, err = fetchPlayHistoryFrequency(limit)
+		entries, err = fetchPlayHistoryFrequency(r.Context(), limit)
 	} else {
-		entries, err = fetchPlayHistoryRecency(limit)
+		entries, err = fetchPlayHistoryRecency(r.Context(), limit)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "play history json", "err", err)

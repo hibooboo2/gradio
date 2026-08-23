@@ -55,7 +55,7 @@ func syncRadioStations(ctx context.Context) (int, error) {
 		})
 	}
 
-	if err := upsertRadioStations(stations); err != nil {
+	if err := upsertRadioStations(ctx, stations); err != nil {
 		return 0, fmt.Errorf("upsert radio stations: %w", err)
 	}
 
@@ -65,8 +65,8 @@ func syncRadioStations(ctx context.Context) (int, error) {
 // radioURLs returns the recording urls keyed by station name, loaded from the
 // radio_stations table. It falls back to the built-in defaults when the table
 // has no stations yet.
-func radioURLs() map[string]string {
-	urls, err := fetchRadioStationURLs()
+func radioURLs(ctx context.Context) map[string]string {
+	urls, err := fetchRadioStationURLs(ctx)
 	if err != nil {
 		slog.Error("load radio station urls", "err", err)
 		return defaultURLs()

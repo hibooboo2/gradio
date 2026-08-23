@@ -27,11 +27,11 @@ func requireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		user, err := fetchUserByName(username)
+		user, err := fetchUserByName(r.Context(), username)
 		switch {
 		case err == sql.ErrNoRows:
 			// Unknown user: create one and log them in.
-			if err := createUser(username, password); err != nil {
+			if err := createUser(r.Context(), username, password); err != nil {
 				slog.ErrorContext(r.Context(), "create user", "err", err, "user", username)
 				writeError(w, http.StatusInternalServerError, "failed to create user")
 				return

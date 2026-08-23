@@ -173,7 +173,7 @@ func pathID(r *http.Request) (int64, error) {
 }
 
 func handleListSplits(w http.ResponseWriter, r *http.Request) {
-	splits, err := fetchAllSplits()
+	splits, err := fetchAllSplits(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list splits", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -190,7 +190,7 @@ func handleGetSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	split, err := fetchSplit(id)
+	split, err := fetchSplit(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "split not found")
 		return
@@ -224,7 +224,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	split, err := fetchSplit(id)
+	split, err := fetchSplit(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "split not found")
 		return
@@ -245,7 +245,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 		split.CustomTitle = *req.Title
 	}
 
-	if err := updateSplit(split); err != nil {
+	if err := updateSplit(r.Context(), split); err != nil {
 		slog.ErrorContext(r.Context(), "update split", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -269,13 +269,13 @@ func handleRecordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := recordPlay(id); err != nil {
+	if err := recordPlay(r.Context(), id); err != nil {
 		slog.ErrorContext(r.Context(), "record play", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	plays, rating, err := fetchSongStats(id)
+	plays, rating, err := fetchSongStats(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -304,13 +304,13 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := setRating(id, req.Rating == "like"); err != nil {
+	if err := setRating(r.Context(), id, req.Rating == "like"); err != nil {
 		slog.ErrorContext(r.Context(), "set rating", "err", err, "id", id, "rating", req.Rating)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	plays, rating, err := fetchSongStats(id)
+	plays, rating, err := fetchSongStats(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -319,7 +319,7 @@ func handleSetRating(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleListRecordings(w http.ResponseWriter, r *http.Request) {
-	recordings, err := fetchAllRecordings()
+	recordings, err := fetchAllRecordings(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list recordings", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -482,7 +482,7 @@ var radioPalette = []string{
 // handleSplitsView renders an htmx-friendly HTML fragment listing all splits,
 // grouped by radio.
 func handleSplitsView(w http.ResponseWriter, r *http.Request) {
-	splits, err := fetchAllSplits()
+	splits, err := fetchAllSplits(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list splits view", "err", err)
 		http.Error(w, "failed to load splits", http.StatusInternalServerError)
@@ -493,7 +493,7 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	order := []string{}
 	byRadio := map[string][]Split{}
 	for _, s := range splits {
-		radio := radioFromPath(s.SourcePath)
+		radio := radioFromPath(r.Context(), s.SourcePath)
 		if _, ok := byRadio[radio]; !ok {
 			order = append(order, radio)
 		}
@@ -525,10 +525,10 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 // legacy recordings), or directly in recordings/ when no radio directory is
 // present. A hashed directory is resolved back to the original station name
 // via the recordings table so the UI shows display names, not hashes.
-func radioFromPath(path string) string {
+func radioFromPath(ctx context.Context, path string) string {
 	dir := filepath.Base(filepath.Dir(path))
 	if dir == "." || dir == "" || dir == "recordings" {
 		return "manual"
 	}
-	return radioDisplayName(dir)
+	return radioDisplayName(ctx, dir)
 }
