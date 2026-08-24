@@ -910,6 +910,82 @@
 		}
 		.history-table td:first-child { font-weight: 600; }
 		.history-table td:nth-child(2) { color: var(--muted); }
+
+		/* ---------- Settings tab ---------- */
+		.settings-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+		.settings-item { padding: 1rem 1.1rem; }
+		.settings-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.6rem; }
+		@media (max-width: 600px) {
+			.settings-head { flex-direction: column; align-items: flex-start; gap: 0.25rem; }
+		}
+		.settings-key { font-weight: 700; font-family: ui-monospace, monospace; font-size: 0.9rem; }
+		.settings-meta { color: var(--muted); font-size: 0.75rem; }
+		.settings-value {
+			background: var(--bg);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 0.75rem;
+			font-size: 0.8rem;
+			font-family: ui-monospace, monospace;
+			white-space: pre-wrap;
+			word-break: break-all;
+			max-height: 220px;
+			overflow: auto;
+			margin: 0 0 0.75rem;
+		}
+		.settings-actions { display: flex; gap: 0.5rem; }
+		.btn-settings-edit { background: var(--accent); }
+		/* Fallback so the delete button stays danger-styled even without .btn-danger. */
+		.btn-settings-delete {
+			background: transparent;
+			color: var(--danger);
+			border: 1px solid var(--danger);
+		}
+		.btn-settings-delete:hover { background: rgba(239, 68, 68, 0.15); filter: none; }
+
+		.settings-editor { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+		.settings-editor textarea {
+			background: var(--bg);
+			color: var(--text);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 0.75rem;
+			font-family: ui-monospace, monospace;
+			font-size: 0.85rem;
+			min-height: 8rem;
+			resize: vertical;
+			outline: none;
+		}
+		.settings-editor textarea:focus { border-color: var(--accent); }
+		.settings-editor textarea.invalid { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2); }
+		.settings-editor-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+		.settings-editor input[readonly] { opacity: 0.75; cursor: not-allowed; }
+		.settings-error { color: var(--danger); font-size: 0.8rem; }
+		.settings-success { color: var(--accent-2); font-size: 0.8rem; }
+		.btn-settings-format {
+			background: transparent;
+			color: var(--text);
+			border: 1px solid var(--border);
+		}
+		.btn-settings-format:hover { background: var(--panel-2); filter: none; }
+		.btn-settings-cancel {
+			background: transparent;
+			color: var(--muted);
+			border: 1px solid var(--border);
+		}
+		.btn-settings-cancel:hover { color: var(--text); filter: none; }
+
+		.settings-create {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 12px;
+			padding: 1rem 1.1rem;
+			margin-bottom: 1.25rem;
+		}
+		.settings-create h3 { margin: 0 0 0.75rem; font-size: 0.9rem; }
+		.settings-create-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+		.settings-create-row input[type="text"] { flex: 1; min-width: 10rem; }
+		.settings-create-row textarea { flex: 2; min-width: 12rem; min-height: 3rem; }
 	</style>
 </head>
 <body>
@@ -936,6 +1012,9 @@
 			<button class="tab" data-tab="history" data-title="Play History" data-subtitle="What you've played, when" data-controls="false"
 				hx-get="/history/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/history"
 				hx-on:click="selectTab('history')">History</button>
+			<button class="tab" data-tab="settings" data-title="Settings" data-subtitle="Edit raw JSON values" data-controls="false"
+				hx-get="/settings/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/settings"
+				hx-on:click="selectTab('settings')">Settings</button>
 		</nav>
 	</aside>
 	<main class="main">
@@ -1029,6 +1108,9 @@
 			} else if (path.startsWith('/history')) {
 				tab = 'history';
 				frag = '/history/view' + window.location.search;
+			} else if (path.startsWith('/settings')) {
+				tab = 'settings';
+				frag = '/settings/view';
 			} else {
 				tab = 'splits';
 				frag = '/splits/view';
@@ -2067,6 +2149,227 @@
 			}, duration);
 		}
 
+		// ---------- Settings editor ----------
+		// The /settings/view fragment is a plain list of <li data-setting-key>
+		// rows with a <pre data-setting-value> holding the raw JSON and Edit /
+		// Delete buttons. This block injects a create/update editor panel at the
+		// top of the view and wires the whole thing up to the settings API
+		// (GET/PUT/DELETE /api/settings/{key}). Values stay raw JSON the whole
+		// way through — object, array, number, string, boolean or null.
+
+		// Pretty-print a JSON string if it parses; return it unchanged otherwise.
+		function prettyJSON(s) {
+			try {
+				return JSON.stringify(JSON.parse(s), null, 2);
+			} catch (err) {
+				return s;
+			}
+		}
+
+		function bindSettingsView(root) {
+			if (!root || !root.querySelector) return;
+			// The htmx target is usually #content, but the real view is the
+			// <div data-settings-view> fragment swapped inside it. Resolve that
+			// so every query and injection below operates on the view itself.
+			const view = root.querySelector('[data-settings-view]') || root;
+			if (!view || view.dataset.settingsBound) return;
+			view.dataset.settingsBound = '1';
+
+			// Pretty-print the raw JSON inside every value <pre> where possible.
+			view.querySelectorAll('[data-setting-value]').forEach(pre => {
+				const txt = (pre.textContent || '').trim();
+				if (txt) {
+					const pretty = prettyJSON(txt);
+					if (pretty !== txt) pre.textContent = pretty;
+				}
+			});
+
+			// Inject the create/update panel at the top of the view.
+			let editor = view.querySelector('[data-settings-editor]');
+			if (!editor) {
+				editor = document.createElement('div');
+				editor.className = 'settings-create settings-editor';
+				editor.setAttribute('data-settings-editor', '');
+				editor.innerHTML = [
+					'<h3 data-settings-title>Create Setting</h3>',
+					'<div class="settings-create-row">',
+					'  <input type="text" data-setting-key-input placeholder="setting key (e.g. theme.accent)" spellcheck="false">',
+					'  <textarea data-setting-value-input spellcheck="false" placeholder=\'{"foo": 1} — or 42, "text", true, null\'></textarea>',
+					'</div>',
+					'<div class="settings-editor-row">',
+					'  <button type="button" data-setting-save>Save</button>',
+					'  <button type="button" class="btn-settings-format" data-setting-format>Format</button>',
+					'  <button type="button" class="btn-settings-cancel" data-setting-cancel>Cancel</button>',
+					'  <span class="settings-error" data-settings-error hidden></span>',
+					'  <span class="settings-success" data-settings-success hidden></span>',
+					'</div>',
+				].join('\n');
+				// Place the editor right after the view header, above the list.
+				const header = view.querySelector('.view-header');
+				if (header && header.parentElement === view) view.insertBefore(editor, header.nextSibling);
+				else if (header) header.after(editor); // fallback
+				else view.insertBefore(editor, view.firstChild);
+			}
+
+			const keyInput = editor.querySelector('[data-setting-key-input]');
+			const valueInput = editor.querySelector('[data-setting-value-input]');
+			const titleEl = editor.querySelector('[data-settings-title]');
+			const errorEl = editor.querySelector('[data-settings-error]');
+			const successEl = editor.querySelector('[data-settings-success]');
+			const saveBtn = editor.querySelector('[data-setting-save]');
+			const formatBtn = editor.querySelector('[data-setting-format]');
+			const cancelBtn = editor.querySelector('[data-setting-cancel]');
+			let editingKey = null;
+
+			function setStatus(kind, msg) {
+				if (kind === 'error') {
+					errorEl.textContent = msg;
+					errorEl.hidden = false;
+					successEl.hidden = true;
+				} else if (kind === 'success') {
+					successEl.textContent = msg;
+					successEl.hidden = false;
+					errorEl.hidden = true;
+				} else {
+					errorEl.hidden = true;
+					successEl.hidden = true;
+				}
+			}
+
+			function resetEditor() {
+				editingKey = null;
+				keyInput.value = '';
+				keyInput.readOnly = false;
+				valueInput.value = '';
+				valueInput.classList.remove('invalid');
+				titleEl.textContent = 'Create Setting';
+				setStatus('clear');
+			}
+
+			function startEdit(key, value) {
+				editingKey = key;
+				keyInput.value = key;
+				keyInput.readOnly = true;
+				valueInput.value = prettyJSON(value);
+				valueInput.classList.remove('invalid');
+				titleEl.textContent = 'Update Setting — ' + key;
+				setStatus('clear');
+				valueInput.focus();
+			}
+
+			// Edit buttons: load the row's key + value into the editor.
+			view.querySelectorAll('[data-setting-edit]').forEach(btn => {
+				btn.addEventListener('click', () => {
+					const item = btn.closest('[data-setting-key]');
+					if (!item) return;
+					const key = item.getAttribute('data-setting-key');
+					const pre = item.querySelector('[data-setting-value]');
+					startEdit(key, pre ? pre.textContent : '');
+				});
+			});
+
+			// Delete buttons: confirm, DELETE, toast, then refresh the view.
+			view.querySelectorAll('[data-setting-delete]').forEach(btn => {
+				btn.addEventListener('click', async () => {
+					const item = btn.closest('[data-setting-key]');
+					if (!item) return;
+					const key = item.getAttribute('data-setting-key');
+					if (!confirm('Delete setting "' + key + '"?')) return;
+					try {
+						const res = await fetch('/api/settings/' + encodeURIComponent(key), {
+							method: 'DELETE',
+						});
+						if (!res.ok) {
+							const data = await res.json().catch(() => ({}));
+							showToast((data && data.error) || 'Failed to delete "' + key + '"', 'error', 4000);
+							return;
+						}
+						showToast('Deleted "' + key + '"', 'success');
+						htmx.ajax('GET', '/settings/view', '#content');
+					} catch (err) {
+						showToast('Failed to delete "' + key + '"', 'error', 4000);
+					}
+				});
+			});
+
+			// Format: pretty-print the value in the textarea.
+			formatBtn.addEventListener('click', () => {
+				const raw = valueInput.value;
+				if (!raw.trim()) return;
+				try {
+					const parsed = JSON.parse(raw); // throws when invalid
+					valueInput.value = JSON.stringify(parsed, null, 2);
+					valueInput.classList.remove('invalid');
+					setStatus('clear');
+				} catch (err) {
+					valueInput.classList.add('invalid');
+					setStatus('error', 'Invalid JSON — cannot format.');
+				}
+			});
+
+			// Save: validate raw JSON, then PUT it as the raw value.
+			saveBtn.addEventListener('click', async () => {
+				const key = keyInput.value.trim();
+				if (!key) {
+					keyInput.focus();
+					setStatus('error', 'Key is required.');
+					showToast('Setting key is required', 'error', 3000);
+					return;
+				}
+				const raw = valueInput.value.trim();
+				let parsed;
+				try {
+					parsed = JSON.parse(raw);
+				} catch (err) {
+					valueInput.classList.add('invalid');
+					setStatus('error', 'Invalid JSON: ' + err.message);
+					showToast('Invalid JSON — check the value', 'error', 4000);
+					return;
+				}
+				valueInput.classList.remove('invalid');
+				saveBtn.disabled = true;
+				try {
+					// The body is the raw JSON value itself, not {value: ...}.
+					const res = await fetch('/api/settings/' + encodeURIComponent(key), {
+						method: 'PUT',
+						headers: { 'Content-Type': 'application/json' },
+						body: raw,
+					});
+					if (!res.ok) {
+						const data = await res.json().catch(() => ({}));
+						setStatus('error', (data && data.error) || 'Failed to save "' + key + '"');
+						showToast((data && data.error) || 'Failed to save setting', 'error', 4000);
+						return;
+					}
+					setStatus('success', 'Saved "' + key + '" (' + (typeof parsed) + ')');
+					showToast('Saved "' + key + '"', 'success');
+					htmx.ajax('GET', '/settings/view', '#content');
+				} catch (err) {
+					setStatus('error', 'Network error — could not save "' + key + '"');
+					showToast('Failed to save setting', 'error', 4000);
+				} finally {
+					saveBtn.disabled = false;
+				}
+			});
+
+			// Cancel: clear the editor back to create mode.
+			cancelBtn.addEventListener('click', resetEditor);
+
+			// Escape clears the editor, Enter in the key field jumps to the value.
+			keyInput.addEventListener('keydown', (e) => {
+				if (e.key === 'Enter') { e.preventDefault(); valueInput.focus(); }
+				else if (e.key === 'Escape') resetEditor();
+			});
+			valueInput.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape') resetEditor();
+			});
+			valueInput.addEventListener('input', () => {
+				valueInput.classList.remove('invalid');
+				setStatus('clear');
+			});
+			keyInput.addEventListener('input', () => setStatus('clear'));
+		}
+
 		// ---------- Record & Play ----------
 		// Starts recording a station and loads its queue into the persistent
 		// mini player without leaving the current tab. When the station has no
@@ -2190,6 +2493,9 @@
 		document.body.addEventListener('htmx:afterSwap', (e) => {
 			const target = e.detail && e.detail.target;
 			if (!target || !target.querySelector) return;
+			if (target.querySelector('[data-settings-view]')) {
+				bindSettingsView(target);
+			}
 			if (target.querySelector('[data-player-wrap]')) {
 				bindFullPlayer(target);
 				const wrap = target.querySelector('[data-player-wrap]');

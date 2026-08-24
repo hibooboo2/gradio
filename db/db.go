@@ -286,12 +286,12 @@ func SetSetting[T any](ctx context.Context, key string, value T) error {
 }
 
 // GetSetting reads a value from the settings table and unmarshals it into T.
-// It returns sql.ErrNoRows when the key has not been set; the caller decides
-// how to handle a missing key.
-func GetSetting[T any](ctx context.Context, key string) (T, error) {
+// If the key has not been set, it persists fallback under key and returns it.
+// Any error other than a missing key is returned as-is.
+func GetSetting[T any](ctx context.Context, key string, fallback T) (T, error) {
 	var zero T
 	if DB == nil {
-		return zero, fmt.Errorf("nil db")
+		return fallback, fmt.Errorf("nil db")
 	}
 
 	var raw []byte
@@ -299,6 +299,12 @@ func GetSetting[T any](ctx context.Context, key string) (T, error) {
 		`SELECT value FROM settings WHERE key = $1`,
 		key,
 	).Scan(&raw)
+	if err == sql.ErrNoRows {
+		if serr := SetSetting(ctx, key, fallback); serr != nil {
+			return fallback, fmt.Errorf("setting fallback %q: %w", key, serr)
+		}
+		return fallback, nil
+	}
 	if err != nil {
 		return zero, err
 	}
@@ -310,16 +316,9 @@ func GetSetting[T any](ctx context.Context, key string) (T, error) {
 }
 
 // GetSettingOrDefault reads a value from the settings table, returning def when
-// the key has not been set.
+// the key has not been set. Note that the missing key is persisted with def.
 func GetSettingOrDefault[T any](ctx context.Context, key string, def T) (T, error) {
-	v, err := GetSetting[T](ctx, key)
-	if err == sql.ErrNoRows {
-		return def, nil
-	}
-	if err != nil {
-		return def, err
-	}
-	return v, nil
+	return GetSetting(ctx, key, def)
 }
 
 // MaxDownloadsKey is the settings key for the maximum number of concurrent
@@ -329,14 +328,77 @@ const MaxDownloadsKey = "max_downloads"
 // GetMaxDownloads returns the configured maximum number of concurrent music
 // downloads. A missing or zero value means unlimited.
 func GetMaxDownloads(ctx context.Context) (int, error) {
-	max, err := GetSetting[int](ctx, MaxDownloadsKey)
-	if err == sql.ErrNoRows {
-		return 0, nil
+	return GetSetting(ctx, MaxDownloadsKey, 0)
+}
+
+// SettingEntry is one row of the settings table: a key, its raw JSON value,
+// and the time it was last updated.
+type SettingEntry struct {
+	Key       string          `json:"key"`
+	Value     json.RawMessage `json:"value"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// ListSettings returns every setting, ordered by key. Values are returned as
+// raw JSON so callers can present them without re-marshaling.
+func ListSettings(ctx context.Context) ([]SettingEntry, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("nil db")
 	}
+
+	rows, err := DB.QueryContext(ctx,
+		`SELECT key, value, updated_at FROM settings ORDER BY key ASC`,
+	)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return max, nil
+	defer rows.Close()
+
+	var entries []SettingEntry
+	for rows.Next() {
+		var e SettingEntry
+		if err := rows.Scan(&e.Key, &e.Value, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+
+	return entries, rows.Err()
+}
+
+// DeleteSetting removes a setting by key. It returns sql.ErrNoRows when the
+// key does not exist.
+func DeleteSetting(ctx context.Context, key string) error {
+	if DB == nil {
+		return fmt.Errorf("nil db")
+	}
+
+	res, err := DB.ExecContext(ctx, `DELETE FROM settings WHERE key = $1`, key)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// GetSettingRaw returns a setting's value as raw JSON without unmarshaling it.
+// It returns sql.ErrNoRows when the key has not been set.
+func GetSettingRaw(ctx context.Context, key string) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if DB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	err := DB.QueryRowContext(ctx,
+		`SELECT value FROM settings WHERE key = $1`,
+		key,
+	).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // InsertRecording records that a source file was produced and saved by the

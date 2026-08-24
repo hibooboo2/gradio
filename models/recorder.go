@@ -634,6 +634,7 @@ func (r *Recorder) write(p []byte) (int, error) {
 // storeToDisk flushes the in-memory buffer to disk when it has grown past the
 // 5GB threshold, registering the file with the database.
 func (r *Recorder) storeToDisk() bool {
+	slog.Debug("Callied storeToDisk", "name", r.RadioName)
 	if r.Buffer != nil {
 		if r.Buffer.Len() < 1024*1024*1024*5 {
 			slog.Info("Not storing recording from buffer", "size", r.Buffer.Len())

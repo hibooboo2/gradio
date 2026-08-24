@@ -53,6 +53,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /favorites             favorite stations view
 //	GET    /history               play history view
 //	GET    /active                active recordings view
+//	GET    /settings              settings view
 //
 // JSON API backed directly by the cockroach tables:
 //
@@ -65,6 +66,14 @@ func serveAPI(ctx context.Context, addr string) error {
 // GET    /api/shuffle           next global-shuffle batch (?exclude=ids)
 // GET    /api/history           play history (?sort=recency|frequency, ?group=radio, ?limit=N)
 // GET    /api/active-recordings active recordings and queued stations
+//
+// Settings API:
+//
+//	GET    /api/settings          list all settings
+//	GET    /api/settings/{key}    get one setting's raw JSON value
+//	PUT    /api/settings/{key}    set a setting (body is the raw JSON value)
+//	POST   /api/settings/{key}    alias for PUT
+//	DELETE /api/settings/{key}    delete a setting
 //
 // Splits/recordings detail API:
 //
@@ -83,6 +92,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /player/view            player tab fragment (?shuffle=1, ?playlist=.. or ?radio=..)
 //	GET    /history/view           play history tab fragment (?sort=.., ?group=radio, ?limit=N)
 //	GET    /active/view            active recordings tab fragment
+//	GET    /settings/view          settings tab fragment
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
 //	POST   /playlists/{id}/songs   add a split to a playlist (form: split_id)
@@ -99,6 +109,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /favorites", serveIndex)
 	mux.HandleFunc("GET /history", serveIndex)
 	mux.HandleFunc("GET /active", serveIndex)
+	mux.HandleFunc("GET /settings", serveIndex)
 
 	// JSON API backed directly by the cockroach tables.
 	mux.HandleFunc("GET /api/splits", handleListSplits)
@@ -107,6 +118,13 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /api/songs", handleListSongsJSON)
 	mux.HandleFunc("GET /api/radios", handleListRadiosJSON)
 	mux.HandleFunc("GET /api/history", handleHistoryJSON)
+
+	// Settings API.
+	mux.HandleFunc("GET /api/settings", handleListSettingsJSON)
+	mux.HandleFunc("GET /api/settings/{key}", handleGetSettingJSON)
+	mux.HandleFunc("PUT /api/settings/{key}", handleSetSettingJSON)
+	mux.HandleFunc("POST /api/settings/{key}", handleSetSettingJSON) // alias for PUT
+	mux.HandleFunc("DELETE /api/settings/{key}", handleDeleteSettingJSON)
 
 	// Splits/recordings detail API.
 	mux.HandleFunc("GET /splits/{id}", handleGetSplit)
@@ -136,6 +154,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /favorites/view", handleFavoritesView)
 	mux.HandleFunc("GET /history/view", handleHistoryView)
 	mux.HandleFunc("GET /active/view", handleActiveView)
+	mux.HandleFunc("GET /settings/view", handleSettingsView)
 	mux.HandleFunc("POST /stations/{uuid}/record", handleStationRecord)
 	mux.HandleFunc("POST /stations/{uuid}/favorite", handleToggleFavorite)
 
