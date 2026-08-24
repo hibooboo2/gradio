@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -30,12 +31,12 @@ func TestPlaylistLifecycle(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), "/tmp/playlist-test.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/playlist-test.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/playlist-test/output_00000.mp3",
 	}))
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/playlist-test.mp3",
 		Index: 1, Start: 100, End: 200,
 		OutputPath: "split_music/TestRadio/playlist-test/output_00001.mp3",
@@ -102,7 +103,7 @@ func TestPlaylistsViewRenders(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), "/tmp/render.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/render.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/render/output_00000.mp3",
@@ -169,12 +170,12 @@ func TestRadioPlayback(t *testing.T) {
 	for _, radio := range []string{"RadioA", "RadioB"} {
 		recID, err := db.InsertRecording(t.Context(), "/tmp/radio-"+radio+".mp3", radio, time.Now(), 123)
 		require.NoError(t, err)
-		require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+		require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
 			Index: 0, Start: 0, End: 100,
 			OutputPath: "split_music/" + radio + "/radio/output_00000.mp3",
 		}))
-		require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+		require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 			RecordingID: recID, SourcePath: "/tmp/radio-" + radio + ".mp3",
 			Index: 1, Start: 100, End: 200,
 			OutputPath: "split_music/" + radio + "/radio/output_00001.mp3",
@@ -250,9 +251,9 @@ func TestStationsView(t *testing.T) {
 	// The stations view renders each station's recording state via the package
 	// recorder manager, which is normally initialized in main(). Tests must
 	// create one so the view does not dereference a nil manager.
-	recorderManager = NewRecorderSet(t.Context())
+	recorderManager = models.NewRecorderSet(t.Context())
 
-	require.NoError(t, db.UpsertRadioStations(t.Context(), []db.RadioStation{
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
 		{StationUUID: "station-1", Name: "Alpha FM", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
 		{StationUUID: "station-2", Name: "Beta Radio", URLResolved: "https://b.example/stream", CountryCode: "DE", LanguageCodes: "ger"},
 	}))
@@ -279,8 +280,8 @@ func TestStationsView(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body = rec.Body.String()
 	require.Contains(t, body, "No songs for Alpha FM yet.")
-	require.True(t, recorderManager.isRecording("Alpha FM"), "station should be recording after the click")
-	recorderManager.stop("Alpha FM")
+	require.True(t, recorderManager.IsRecording("Alpha FM"), "station should be recording after the click")
+	recorderManager.Stop("Alpha FM")
 
 	// Recording is idempotent: a second click does not error.
 	req = authedRequest(t, http.MethodPost, "/stations/station-1/record", nil)

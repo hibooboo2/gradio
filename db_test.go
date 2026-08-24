@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -80,16 +81,16 @@ func TestRecordingDBLifecycle(t *testing.T) {
 			found = true
 			require.Equal(t, sourcePath, r.SourcePath)
 			require.Equal(t, radio, r.Radio)
-			require.Equal(t, db.RecordingStatus("pending"), r.Status)
+			require.Equal(t, models.RecordingStatus("pending"), r.Status)
 		}
 	}
 	require.True(t, found, "pending recording should contain the inserted row")
 
-	require.NoError(t, db.SetRecordingStatus(t.Context(), id, db.StatusProcessing))
-	require.NoError(t, db.SetRecordingStatus(t.Context(), id, db.StatusProcessed))
+	require.NoError(t, db.SetRecordingStatus(t.Context(), id, models.StatusProcessing))
+	require.NoError(t, db.SetRecordingStatus(t.Context(), id, models.StatusProcessed))
 
 	// A split linked to this recording.
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: id,
 		SourcePath:  sourcePath,
 		Index:       0,
@@ -114,7 +115,7 @@ func TestRecordingDBLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, splits[0].ID, fetched.ID)
 
-	require.NoError(t, db.UpdateSplit(t.Context(), db.Split{
+	require.NoError(t, db.UpdateSplit(t.Context(), models.Split{
 		ID:             splits[0].ID,
 		RecordingID:    id,
 		SourcePath:     sourcePath,
@@ -156,8 +157,8 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	require.NoError(t, err)
 
 	splitIDs := make([]int64, 0, 4)
-	for i, cls := range []string{"", "", db.ClassificationCommercial, ""} {
-		s := db.Split{
+	for i, cls := range []string{"", "", models.ClassificationCommercial, ""} {
+		s := models.Split{
 			RecordingID:    recID,
 			SourcePath:     "/tmp/global-shuffle.mp3",
 			Index:          i,
@@ -211,7 +212,7 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, batch, 3, "commercial split must be excluded")
 	for _, s := range batch {
-		require.NotEqual(t, db.ClassificationCommercial, s.Classification)
+		require.NotEqual(t, models.ClassificationCommercial, s.Classification)
 	}
 
 	// Excluding already-played splits keeps them out of the next batch.
@@ -252,14 +253,14 @@ func TestRadioStationDB(t *testing.T) {
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
 	// Upsert a batch of stations.
-	require.NoError(t, db.UpsertRadioStations(t.Context(), []db.RadioStation{
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
 		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream", Favicon: "https://a.example/icon.png", Tags: "jazz,pop", CountryCode: "US", LanguageCodes: "eng"},
 		{StationUUID: "uuid-2", Name: "Beta", URLResolved: "https://b.example/stream", Tags: "classical", CountryCode: "DE", LanguageCodes: "ger"},
 		{StationUUID: "uuid-3", Name: "Gamma", URLResolved: "", CountryCode: "FR"}, // no resolved url: kept but excluded from map
 	}))
 
 	// Re-syncing the same uuid updates metadata in place.
-	require.NoError(t, db.UpsertRadioStations(t.Context(), []db.RadioStation{
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
 		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream", Favicon: "https://a.example/new-icon.png", Tags: "jazz,pop,rock", CountryCode: "US", LanguageCodes: "eng"},
 	}))
 

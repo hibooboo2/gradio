@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -376,7 +377,7 @@ func InsertRecording(ctx context.Context, sourcePath, radio string, recordedAt t
 
 // FetchPendingRecordings returns recordings that still need to be split,
 // oldest first.
-func FetchPendingRecordings(ctx context.Context) ([]Recording, error) {
+func FetchPendingRecordings(ctx context.Context) ([]models.Recording, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -386,16 +387,16 @@ func FetchPendingRecordings(ctx context.Context) ([]Recording, error) {
 		 FROM recordings
 		 WHERE status = $1 OR status = $2
 		 ORDER BY recorded_at ASC`,
-		StatusPending, StatusError,
+		models.StatusPending, models.StatusError,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var recs []Recording
+	var recs []models.Recording
 	for rows.Next() {
-		var r Recording
+		var r models.Recording
 		var recordedAt string
 		if err := rows.Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status); err != nil {
 			return nil, err
@@ -410,7 +411,7 @@ func FetchPendingRecordings(ctx context.Context) ([]Recording, error) {
 }
 
 // SetRecordingStatus updates the pipeline status of a source recording.
-func SetRecordingStatus(ctx context.Context, id int64, status RecordingStatus) error {
+func SetRecordingStatus(ctx context.Context, id int64, status models.RecordingStatus) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -460,7 +461,7 @@ func RecordingSplitFolder(ctx context.Context, recordingID int64) (folder string
 // The id is a hash of the source file name and the split's boundaries (start
 // and end in the source stream), so re-processing the same recording produces
 // the same split ids.
-func InsertSplit(ctx context.Context, s Split) error {
+func InsertSplit(ctx context.Context, s models.Split) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -481,7 +482,7 @@ func InsertSplit(ctx context.Context, s Split) error {
 // FetchSplitsForRecording returns the split files for a source recording in
 // their original stream order. Files are adjacent in the original stream when
 // their Index values are consecutive.
-func FetchSplitsForRecording(ctx context.Context, recordingID int64) ([]Split, error) {
+func FetchSplitsForRecording(ctx context.Context, recordingID int64) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -498,9 +499,9 @@ func FetchSplitsForRecording(ctx context.Context, recordingID int64) ([]Split, e
 	}
 	defer rows.Close()
 
-	var splits []Split
+	var splits []models.Split
 	for rows.Next() {
-		var s Split
+		var s models.Split
 		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle); err != nil {
 			return nil, err
 		}
@@ -512,7 +513,7 @@ func FetchSplitsForRecording(ctx context.Context, recordingID int64) ([]Split, e
 
 // FetchAllSplits returns every split, newest recording first, joined with the
 // radio name of the source recording for convenient display.
-func FetchAllSplits(ctx context.Context) ([]Split, error) {
+func FetchAllSplits(ctx context.Context) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -527,9 +528,9 @@ func FetchAllSplits(ctx context.Context) ([]Split, error) {
 	}
 	defer rows.Close()
 
-	var splits []Split
+	var splits []models.Split
 	for rows.Next() {
-		var s Split
+		var s models.Split
 		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle); err != nil {
 			return nil, err
 		}
@@ -540,12 +541,12 @@ func FetchAllSplits(ctx context.Context) ([]Split, error) {
 }
 
 // FetchSplit returns a single split by id, or an error when it does not exist.
-func FetchSplit(ctx context.Context, id int64) (Split, error) {
+func FetchSplit(ctx context.Context, id int64) (models.Split, error) {
 	if DB == nil {
-		return Split{}, fmt.Errorf("nil db")
+		return models.Split{}, fmt.Errorf("nil db")
 	}
 
-	var s Split
+	var s models.Split
 	err := DB.QueryRowContext(ctx,
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
@@ -553,14 +554,14 @@ func FetchSplit(ctx context.Context, id int64) (Split, error) {
 		id,
 	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle)
 	if err != nil {
-		return Split{}, err
+		return models.Split{}, err
 	}
 
 	return s, nil
 }
 
 // UpdateSplit persists changes to a split's boundaries and classification.
-func UpdateSplit(ctx context.Context, s Split) error {
+func UpdateSplit(ctx context.Context, s models.Split) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -575,12 +576,12 @@ func UpdateSplit(ctx context.Context, s Split) error {
 }
 
 // FetchRecordingByPath returns the recording row for a source file.
-func FetchRecordingByPath(ctx context.Context, sourcePath string) (Recording, error) {
+func FetchRecordingByPath(ctx context.Context, sourcePath string) (models.Recording, error) {
 	if DB == nil {
-		return Recording{}, fmt.Errorf("nil db")
+		return models.Recording{}, fmt.Errorf("nil db")
 	}
 
-	var r Recording
+	var r models.Recording
 	var recordedAt string
 	err := DB.QueryRowContext(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
@@ -589,7 +590,7 @@ func FetchRecordingByPath(ctx context.Context, sourcePath string) (Recording, er
 		sourcePath,
 	).Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status)
 	if err != nil {
-		return Recording{}, err
+		return models.Recording{}, err
 	}
 	if t, err := time.Parse(time.RFC3339, recordedAt); err == nil {
 		r.RecordedAt = t
@@ -599,12 +600,12 @@ func FetchRecordingByPath(ctx context.Context, sourcePath string) (Recording, er
 }
 
 // FetchRecordingByID returns the recording row for a recording id.
-func FetchRecordingByID(ctx context.Context, id int64) (Recording, error) {
+func FetchRecordingByID(ctx context.Context, id int64) (models.Recording, error) {
 	if DB == nil {
-		return Recording{}, fmt.Errorf("nil db")
+		return models.Recording{}, fmt.Errorf("nil db")
 	}
 
-	var r Recording
+	var r models.Recording
 	var recordedAt string
 	err := DB.QueryRowContext(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
@@ -613,7 +614,7 @@ func FetchRecordingByID(ctx context.Context, id int64) (Recording, error) {
 		id,
 	).Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status)
 	if err != nil {
-		return Recording{}, err
+		return models.Recording{}, err
 	}
 	if t, err := time.Parse(time.RFC3339, recordedAt); err == nil {
 		r.RecordedAt = t
@@ -623,7 +624,7 @@ func FetchRecordingByID(ctx context.Context, id int64) (Recording, error) {
 }
 
 // FetchAllRecordings returns every recording, newest first.
-func FetchAllRecordings(ctx context.Context) ([]Recording, error) {
+func FetchAllRecordings(ctx context.Context) ([]models.Recording, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -638,9 +639,9 @@ func FetchAllRecordings(ctx context.Context) ([]Recording, error) {
 	}
 	defer rows.Close()
 
-	var recs []Recording
+	var recs []models.Recording
 	for rows.Next() {
-		var r Recording
+		var r models.Recording
 		var recordedAt string
 		if err := rows.Scan(&r.ID, &r.SourcePath, &r.Radio, &recordedAt, &r.SizeBytes, &r.Status); err != nil {
 			return nil, err
@@ -657,7 +658,7 @@ func FetchAllRecordings(ctx context.Context) ([]Recording, error) {
 // FetchRadios returns the distinct radios that have at least one split, with
 // their split counts, ordered by name. The radio name comes from the
 // recordings table, which is set when a source stream is saved.
-func FetchRadios(ctx context.Context) ([]Radio, error) {
+func FetchRadios(ctx context.Context) ([]models.Radio, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -674,9 +675,9 @@ func FetchRadios(ctx context.Context) ([]Radio, error) {
 	}
 	defer rows.Close()
 
-	var radios []Radio
+	var radios []models.Radio
 	for rows.Next() {
-		var radio Radio
+		var radio models.Radio
 		if err := rows.Scan(&radio.Name, &radio.SplitCount); err != nil {
 			return nil, err
 		}
@@ -688,7 +689,7 @@ func FetchRadios(ctx context.Context) ([]Radio, error) {
 
 // FetchRadioSplits returns up to limit random splits belonging to the given
 // radio, in random order, so a radio can be "played" as a shuffled queue.
-func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]Split, error) {
+func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -709,9 +710,9 @@ func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]Split, er
 	}
 	defer rows.Close()
 
-	var splits []Split
+	var splits []models.Split
 	for rows.Next() {
-		var s Split
+		var s models.Split
 		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle, &s.Plays, &s.Rating); err != nil {
 			return nil, err
 		}
@@ -726,7 +727,7 @@ func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]Split, er
 // repeated shuffles keep surfacing music the user has not heard yet. Splits
 // marked as commercials or re_split are skipped, as are any splits whose ids
 // appear in exclude (already played in the current shuffle session).
-func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([]Split, error) {
+func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -753,16 +754,16 @@ func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([
 		 WHERE s.classification != $1 AND s.classification != $2 AND s.id != ALL($3::INT[])
 		 ORDER BY COALESCE(sp.plays, 0) ASC, random()
 		 LIMIT $4`,
-		ClassificationCommercial, ClassificationReSplit, excludeArg, limit,
+		models.ClassificationCommercial, models.ClassificationReSplit, excludeArg, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch shuffle: %w", err)
 	}
 	defer rows.Close()
 
-	var splits []Split
+	var splits []models.Split
 	for rows.Next() {
-		var s Split
+		var s models.Split
 		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle, &s.Plays, &s.Rating); err != nil {
 			return nil, err
 		}
@@ -873,18 +874,18 @@ func NextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, e
 
 // FetchUserByName returns the user with the given name, or sql.ErrNoRows when
 // no such user exists.
-func FetchUserByName(ctx context.Context, name string) (User, error) {
+func FetchUserByName(ctx context.Context, name string) (models.User, error) {
 	if DB == nil {
-		return User{}, fmt.Errorf("nil db")
+		return models.User{}, fmt.Errorf("nil db")
 	}
 
-	var u User
+	var u models.User
 	err := DB.QueryRowContext(ctx,
 		`SELECT id, name, password FROM users WHERE name = $1`,
 		name,
 	).Scan(&u.ID, &u.Name, &u.Password)
 	if err != nil {
-		return User{}, err
+		return models.User{}, err
 	}
 	return u, nil
 }
@@ -911,6 +912,6 @@ func CreateUser(ctx context.Context, name, password string) error {
 
 // UserPasswordMatches reports whether the given plaintext password matches the
 // stored bcrypt hash for the user.
-func UserPasswordMatches(u User, password string) bool {
+func UserPasswordMatches(u models.User, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) == nil
 }

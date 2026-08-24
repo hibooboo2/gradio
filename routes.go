@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 )
 
 // serveAPI runs the management HTTP server until ctx is cancelled.
@@ -201,18 +202,8 @@ func handleGetSplit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, split)
 }
 
-// updateSplitRequest is the JSON body accepted by PATCH /splits/{id}. Fields
-// are pointers so that omitted fields are left unchanged.
-type updateSplitRequest struct {
-	Start          *float64 `json:"start"`
-	End            *float64 `json:"end"`
-	Classification *string  `json:"classification"`
-	// CustomTitle is the display-only rename for the split. "title" is
-	// accepted as an alias for backward compatibility.
-	CustomTitle *string `json:"custom_title"`
-	Title       *string `json:"title"`
-}
-
+// handleUpdateSplit updates a split's boundaries, classification, and/or
+// custom title from the JSON body.
 func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -220,7 +211,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req updateSplitRequest
+	var req models.UpdateSplitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -259,7 +250,7 @@ func handleUpdateSplit(w http.ResponseWriter, r *http.Request) {
 // handleRecordDomainsJSON reports which domains are currently being recorded
 // and which stations are queued behind them.
 func handleRecordDomainsJSON(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, recorderManager.domainStatuses())
+	writeJSON(w, http.StatusOK, recorderManager.DomainStatuses())
 }
 
 // handleRecordPlay records that a split was listened to, incrementing its play
@@ -461,16 +452,8 @@ var splitsViewTemplate = template.Must(template.New("splits").Funcs(viewFuncs).P
 {{end}}
 `))
 
-// radioGroup is a set of splits that share the same source radio, plus a
-// display color for that radio.
-type radioGroup struct {
-	Radio  string
-	Color  string
-	Splits []db.Split
-}
-
 // radioPalette assigns a stable color to each distinct radio.
-var radioPalette = db.RadioPalette
+var radioPalette = models.RadioPalette
 
 // handleSplitsView renders an htmx-friendly HTML fragment listing all splits,
 // grouped by radio.
@@ -484,7 +467,7 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 
 	// Group splits by radio, preserving first-seen order.
 	order := []string{}
-	byRadio := map[string][]db.Split{}
+	byRadio := map[string][]models.Split{}
 	for _, s := range splits {
 		radio := radioFromPath(r.Context(), s.SourcePath)
 		if _, ok := byRadio[radio]; !ok {
@@ -498,9 +481,9 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 		colorOf[radio] = radioPalette[i%len(radioPalette)]
 	}
 
-	groups := make([]radioGroup, 0, len(order))
+	groups := make([]models.RadioGroup, 0, len(order))
 	for _, radio := range order {
-		groups = append(groups, radioGroup{
+		groups = append(groups, models.RadioGroup{
 			Radio:  radio,
 			Color:  colorOf[radio],
 			Splits: byRadio[radio],

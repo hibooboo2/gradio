@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/hibooboo2/gradio/models"
 )
 
 // historySelect is the shared SELECT prefix for the play history queries. It
@@ -24,10 +26,10 @@ const historySelect = `
 
 // scanHistoryRows scans the shared historySelect result columns into
 // HistoryEntry values.
-func scanHistoryRows(rows *sql.Rows) ([]HistoryEntry, error) {
-	var entries []HistoryEntry
+func scanHistoryRows(rows *sql.Rows) ([]models.HistoryEntry, error) {
+	var entries []models.HistoryEntry
 	for rows.Next() {
-		var e HistoryEntry
+		var e models.HistoryEntry
 		if err := rows.Scan(
 			&e.Split.ID, &e.Split.RecordingID, &e.Split.SourcePath, &e.Split.Index,
 			&e.Split.Start, &e.Split.End, &e.Split.OutputPath, &e.Split.Classification, &e.Split.CustomTitle,
@@ -46,7 +48,7 @@ func scanHistoryRows(rows *sql.Rows) ([]HistoryEntry, error) {
 // FetchPlayHistoryRecency returns the distinct songs in the play history,
 // ordered by when they were last played (most recent first), limited to limit
 // entries.
-func FetchPlayHistoryRecency(ctx context.Context, limit int) ([]HistoryEntry, error) {
+func FetchPlayHistoryRecency(ctx context.Context, limit int) ([]models.HistoryEntry, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -64,7 +66,7 @@ func FetchPlayHistoryRecency(ctx context.Context, limit int) ([]HistoryEntry, er
 // FetchPlayHistoryFrequency returns the distinct songs in the play history,
 // ordered by how often they were played (most played first), with the most
 // recently played song winning ties. Limited to limit entries.
-func FetchPlayHistoryFrequency(ctx context.Context, limit int) ([]HistoryEntry, error) {
+func FetchPlayHistoryFrequency(ctx context.Context, limit int) ([]models.HistoryEntry, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -81,7 +83,7 @@ func FetchPlayHistoryFrequency(ctx context.Context, limit int) ([]HistoryEntry, 
 
 // FetchPlayHistoryGrouped returns the play history grouped by radio, ordered by
 // radio name then play count. Limited to limit entries total.
-func FetchPlayHistoryGrouped(ctx context.Context, limit int) ([]RadioHistoryGroup, error) {
+func FetchPlayHistoryGrouped(ctx context.Context, limit int) ([]models.RadioHistoryGroup, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -100,7 +102,7 @@ func FetchPlayHistoryGrouped(ctx context.Context, limit int) ([]RadioHistoryGrou
 	}
 
 	order := []string{}
-	byRadio := map[string][]HistoryEntry{}
+	byRadio := map[string][]models.HistoryEntry{}
 	for _, e := range entries {
 		if _, ok := byRadio[e.Radio]; !ok {
 			order = append(order, e.Radio)
@@ -108,25 +110,13 @@ func FetchPlayHistoryGrouped(ctx context.Context, limit int) ([]RadioHistoryGrou
 		byRadio[e.Radio] = append(byRadio[e.Radio], e)
 	}
 
-	groups := make([]RadioHistoryGroup, 0, len(order))
+	groups := make([]models.RadioHistoryGroup, 0, len(order))
 	for i, radio := range order {
-		groups = append(groups, RadioHistoryGroup{
+		groups = append(groups, models.RadioHistoryGroup{
 			Radio: radio,
-			Color: RadioPalette[i%len(RadioPalette)],
+			Color: models.RadioPalette[i%len(models.RadioPalette)],
 			Plays: byRadio[radio],
 		})
 	}
 	return groups, nil
-}
-
-// RadioPalette assigns a stable color to each distinct radio.
-var RadioPalette = []string{
-	"#6366f1", // indigo
-	"#ec4899", // pink
-	"#10b981", // emerald
-	"#f59e0b", // amber
-	"#06b6d4", // cyan
-	"#8b5cf6", // violet
-	"#ef4444", // red
-	"#14b8a6", // teal
 }

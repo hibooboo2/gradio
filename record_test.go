@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -53,7 +54,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	// Pick up to 5 stations with a resolvable URL (deduped by name so two
 	// stations never share a recordings directory).
 	seen := map[string]bool{}
-	var usable []db.RadioStation
+	var usable []models.RadioStation
 	for _, s := range stations {
 		if s.URLResolved == "" || seen[s.Name] {
 			continue
@@ -70,7 +71,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 
 	// Skip stations that are not reachable so a single dead stream does not
 	// make the test flaky.
-	var reachable []db.RadioStation
+	var reachable []models.RadioStation
 	for _, s := range usable {
 		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ok := stationReachable(checkCtx, s.URLResolved)
@@ -99,11 +100,11 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	defer func() { require.NoError(t, os.Chdir(origDir)) }()
 
 	// --- Build one recorder per station ---
-	recorders := make([]*Recorder, 0, len(usable))
+	recorders := make([]*models.Recorder, 0, len(usable))
 	for _, s := range usable {
-		recorders = append(recorders, &Recorder{
-			url:       s.URLResolved,
-			radioName: s.Name,
+		recorders = append(recorders, &models.Recorder{
+			URL:       s.URLResolved,
+			RadioName: s.Name,
 		})
 	}
 
@@ -127,33 +128,33 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	successes := 0
 	for i, rec := range recorders {
 		err := results[i]
-		dir := db.RecordingsDir(rec.radioName)
+		dir := db.RecordingsDir(rec.RadioName)
 
-		rec.mu.Lock()
+		rec.Mu.Lock()
 		bufLen := 0
-		if rec.buffer != nil {
-			bufLen = rec.buffer.Len()
+		if rec.Buffer != nil {
+			bufLen = rec.Buffer.Len()
 		}
-		filename := rec.filename
-		rec.mu.Unlock()
+		filename := rec.Filename
+		rec.Mu.Unlock()
 
 		if err != nil {
-			t.Logf("station %q: RecordOnce returned error (skipping data checks): %v", rec.radioName, err)
+			t.Logf("station %q: RecordOnce returned error (skipping data checks): %v", rec.RadioName, err)
 			continue
 		}
 		successes++
 
-		require.DirExists(t, dir, "recordings dir for %q should exist after RecordOnce", rec.radioName)
-		require.Greater(t, bufLen, 0, "recorder for %q should have buffered stream data", rec.radioName)
-		require.NotEmpty(t, filename, "recorder for %q should have a target filename", rec.radioName)
+		require.DirExists(t, dir, "recordings dir for %q should exist after RecordOnce", rec.RadioName)
+		require.Greater(t, bufLen, 0, "recorder for %q should have buffered stream data", rec.RadioName)
+		require.NotEmpty(t, filename, "recorder for %q should have a target filename", rec.RadioName)
 
 		// storeToDisk only flushes buffers >= 5GB, so 30s of audio stays in
 		// memory. Verify the file would be written if the threshold were met:
 		// the directory exists and the target path is set.
 		if _, statErr := os.Stat(filename); statErr == nil {
-			t.Logf("station %q wrote file %s", rec.radioName, filename)
+			t.Logf("station %q wrote file %s", rec.RadioName, filename)
 		} else {
-			t.Logf("station %q: %s not flushed to disk (storeToDisk requires >=5GB buffer; buffered %d bytes)", rec.radioName, filename, bufLen)
+			t.Logf("station %q: %s not flushed to disk (storeToDisk requires >=5GB buffer; buffered %d bytes)", rec.RadioName, filename, bufLen)
 		}
 	}
 
@@ -168,14 +169,14 @@ func seedTestStations(t *testing.T) {
 
 	body, err := os.ReadFile("initstations_james.json")
 	if err == nil {
-		var page []radioBrowserStation
+		var page []models.RadioBrowserStation
 		if err := json.Unmarshal(body, &page); err == nil {
-			stations := make([]db.RadioStation, 0, len(page))
+			stations := make([]models.RadioStation, 0, len(page))
 			for _, s := range page {
 				if s.URLResolved == "" {
 					continue
 				}
-				stations = append(stations, db.RadioStation{
+				stations = append(stations, models.RadioStation{
 					StationUUID:   s.StationUUID,
 					Name:          s.Name,
 					URLResolved:   s.URLResolved,
@@ -194,7 +195,7 @@ func seedTestStations(t *testing.T) {
 	}
 
 	// Fallback: the two known-good default streams.
-	require.NoError(t, db.UpsertRadioStations(t.Context(), []db.RadioStation{
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
 		{StationUUID: "default-1", Name: "GayPHXRadio", URLResolved: streamURL},
 		{StationUUID: "default-2", Name: "RandomRadio", URLResolved: streamURL2},
 	}))
@@ -208,7 +209,7 @@ func stationReachable(ctx context.Context, url string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := insecureClient.Do(req)
+	resp, err := models.InsecureClient.Do(req)
 	if err != nil {
 		return false
 	}

@@ -4,22 +4,24 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/hibooboo2/gradio/models"
 )
 
 // CreatePlaylist inserts a new playlist and returns the created row.
-func CreatePlaylist(ctx context.Context, name string) (Playlist, error) {
+func CreatePlaylist(ctx context.Context, name string) (models.Playlist, error) {
 	if DB == nil {
-		return Playlist{}, fmt.Errorf("nil db")
+		return models.Playlist{}, fmt.Errorf("nil db")
 	}
 
-	var p Playlist
+	var p models.Playlist
 	var createdAt string
 	err := DB.QueryRowContext(ctx,
 		`INSERT INTO playlists (name) VALUES ($1) RETURNING id, name, created_at`,
 		name,
 	).Scan(&p.ID, &p.Name, &createdAt)
 	if err != nil {
-		return Playlist{}, err
+		return models.Playlist{}, err
 	}
 	if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
 		p.CreatedAt = t
@@ -39,19 +41,19 @@ func DeletePlaylist(ctx context.Context, id int64) error {
 
 // FetchPlaylist returns a single playlist by id, or an error when it does not
 // exist.
-func FetchPlaylist(ctx context.Context, id int64) (Playlist, error) {
+func FetchPlaylist(ctx context.Context, id int64) (models.Playlist, error) {
 	if DB == nil {
-		return Playlist{}, fmt.Errorf("nil db")
+		return models.Playlist{}, fmt.Errorf("nil db")
 	}
 
-	var p Playlist
+	var p models.Playlist
 	var createdAt string
 	err := DB.QueryRowContext(ctx,
 		`SELECT id, name, created_at FROM playlists WHERE id = $1`,
 		id,
 	).Scan(&p.ID, &p.Name, &createdAt)
 	if err != nil {
-		return Playlist{}, err
+		return models.Playlist{}, err
 	}
 	if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
 		p.CreatedAt = t
@@ -61,7 +63,7 @@ func FetchPlaylist(ctx context.Context, id int64) (Playlist, error) {
 
 // FetchAllPlaylists returns every playlist with its track count, ordered by
 // name.
-func FetchAllPlaylists(ctx context.Context) ([]Playlist, error) {
+func FetchAllPlaylists(ctx context.Context) ([]models.Playlist, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -78,9 +80,9 @@ func FetchAllPlaylists(ctx context.Context) ([]Playlist, error) {
 	}
 	defer rows.Close()
 
-	var playlists []Playlist
+	var playlists []models.Playlist
 	for rows.Next() {
-		var p Playlist
+		var p models.Playlist
 		var createdAt string
 		if err := rows.Scan(&p.ID, &p.Name, &createdAt, &p.TrackCount); err != nil {
 			return nil, err
@@ -94,7 +96,7 @@ func FetchAllPlaylists(ctx context.Context) ([]Playlist, error) {
 }
 
 // FetchPlaylistSongs returns the splits in a playlist in playlist order.
-func FetchPlaylistSongs(ctx context.Context, playlistID int64) ([]PlaylistSong, error) {
+func FetchPlaylistSongs(ctx context.Context, playlistID int64) ([]models.PlaylistSong, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -115,9 +117,9 @@ func FetchPlaylistSongs(ctx context.Context, playlistID int64) ([]PlaylistSong, 
 	}
 	defer rows.Close()
 
-	var songs []PlaylistSong
+	var songs []models.PlaylistSong
 	for rows.Next() {
-		var song PlaylistSong
+		var song models.PlaylistSong
 		if err := rows.Scan(
 			&song.PlaylistID, &song.SplitID, &song.Position,
 			&song.Split.ID, &song.Split.RecordingID, &song.Split.SourcePath, &song.Split.Index,
@@ -163,6 +165,6 @@ func RemoveSongFromPlaylist(ctx context.Context, playlistID, splitID int64) erro
 
 // FetchAllSongs returns every split that can be added to a playlist, newest
 // recording first.
-func FetchAllSongs(ctx context.Context) ([]Split, error) {
+func FetchAllSongs(ctx context.Context) ([]models.Split, error) {
 	return FetchAllSplits(ctx)
 }

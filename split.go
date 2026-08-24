@@ -15,73 +15,14 @@ import (
 	"strings"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	"golang.org/x/sync/errgroup"
 )
-
-// silence is an interval of silence detected by ffmpeg's silencedetect filter.
-type silence struct {
-	Start float64
-	End   float64
-}
-
-// boundary marks where one output file ends and the next begins. A split is
-// never made in the middle of a silence: the previous file runs through the
-// end of the detected silence (boundary.end) while the next file begins at
-// the start of that same silence (boundary.start), so both files keep the
-// whole silence instead of cutting through it.
-type boundary struct {
-	Start float64
-	End   float64
-}
 
 const (
 	silenceNoise    = "-17.8dB"
 	silenceDuration = "1.3"
 )
-
-// classificationOption pairs a classification value with the emoji + label
-// shown in the UI dropdowns. The order here is the order the options appear.
-type classificationOption struct {
-	Value string
-	Label string
-}
-
-// classificationOptions is the central list of every classification a split
-// may carry, used by the UI dropdowns and for validation.
-var classificationOptions = []classificationOption{
-	{Value: db.ClassificationNotSong, Label: "⏭️ Not Song / Short clip"},
-	{Value: db.ClassificationLikelySong, Label: "🎵 Likely Song"},
-	{Value: db.ClassificationSong, Label: "🎶 Song"},
-	{Value: db.ClassificationCommercial, Label: "📢 Commercial"},
-	{Value: db.ClassificationInformational, Label: "ℹ️ Informational"},
-	{Value: db.ClassificationNews, Label: "📰 News"},
-	{Value: db.ClassificationReSplit, Label: "✂️ Re-split"},
-}
-
-// validClassifications is the set of classification values a split may carry.
-var validClassifications = func() map[string]struct{} {
-	m := make(map[string]struct{}, len(classificationOptions))
-	for _, o := range classificationOptions {
-		m[o.Value] = struct{}{}
-	}
-	return m
-}()
-
-// isValidClassification reports whether cls is one of the known classifications.
-func isValidClassification(cls string) bool {
-	_, ok := validClassifications[cls]
-	return ok
-}
-
-// clsLabel returns the emoji + description label for a classification value.
-func clsLabel(cls string) string {
-	for _, o := range classificationOptions {
-		if o.Value == cls {
-			return o.Label
-		}
-	}
-	return cls
-}
 
 // errCutOutsideSplit is returned when a resplit cut time falls outside a
 // split's boundaries.
@@ -112,16 +53,16 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return err
 	}
-	rec := db.Recording{
+	rec := models.Recording{
 		ID:         id,
 		SourcePath: fname,
 		Radio:      radio,
 		RecordedAt: info.ModTime(),
 		SizeBytes:  info.Size(),
-		Status:     db.StatusProcessed,
+		Status:     models.StatusProcessed,
 	}
 
-	err = db.SetRecordingStatus(ctx, id, db.StatusProcessing)
+	err = db.SetRecordingStatus(ctx, id, models.StatusProcessing)
 	if err != nil {
 		return fmt.Errorf("failed to set recording status: %w", err)
 	}
@@ -130,7 +71,7 @@ func SplitStream(ctx context.Context, fname string) error {
 	if err != nil {
 		return fmt.Errorf("failed to split recording: %w", err)
 	}
-	err = db.SetRecordingStatus(ctx, id, db.StatusProcessed)
+	err = db.SetRecordingStatus(ctx, id, models.StatusProcessed)
 	if err != nil {
 		return fmt.Errorf("failed to store recording status: %w", err)
 	}
@@ -141,7 +82,7 @@ func SplitStream(ctx context.Context, fname string) error {
 // splitRecording splits a single source recording and stores each resulting
 // output file, its cutoffs, and its position in the original stream, in the
 // splits table.
-func splitRecording(ctx context.Context, rec db.Recording) error {
+func splitRecording(ctx context.Context, rec models.Recording) error {
 	wd, _ := os.Getwd()
 	if !filepath.IsAbs(rec.SourcePath) {
 		rec.SourcePath = filepath.Join(wd, rec.SourcePath)
@@ -166,7 +107,7 @@ func splitRecording(ctx context.Context, rec db.Recording) error {
 	if err != nil {
 		return fmt.Errorf("fetch existing splits for recording %d: %w", rec.ID, err)
 	}
-	existingByIndex := make(map[int]db.Split, len(existing))
+	existingByIndex := make(map[int]models.Split, len(existing))
 	for _, s := range existing {
 		existingByIndex[s.Index] = s
 	}
@@ -209,7 +150,7 @@ func splitRecording(ctx context.Context, rec db.Recording) error {
 				// The row may be missing if a previous run was interrupted
 				// between writing the file and storing the split.
 				if _, ok := existingByIndex[idx]; !ok {
-					if err := db.InsertSplit(ctx, db.Split{
+					if err := db.InsertSplit(ctx, models.Split{
 						RecordingID:    rec.ID,
 						SourcePath:     rec.SourcePath,
 						Index:          idx,
@@ -230,7 +171,7 @@ func splitRecording(ctx context.Context, rec db.Recording) error {
 				return nil
 			}
 
-			err = db.InsertSplit(ctx, db.Split{
+			err = db.InsertSplit(ctx, models.Split{
 				RecordingID:    rec.ID,
 				SourcePath:     rec.SourcePath,
 				Index:          idx,
@@ -258,16 +199,16 @@ func splitRecording(ctx context.Context, rec db.Recording) error {
 // file are left untouched; only its classification changes to re_split. Both
 // new splits get their own output files, extracted from the original recording
 // (not from the existing split file) so the new cut point is exact.
-func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.Split, splitA db.Split, splitB db.Split, err error) {
+func resplitSplit(ctx context.Context, splitID int64, cut float64) (original models.Split, splitA models.Split, splitB models.Split, err error) {
 	orig, err := db.FetchSplit(ctx, splitID)
 	if err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, err
+		return models.Split{}, models.Split{}, models.Split{}, err
 	}
 	if cut <= orig.Start || cut >= orig.End {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("%w: cut %v outside [%v, %v]", errCutOutsideSplit, cut, orig.Start, orig.End)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("%w: cut %v outside [%v, %v]", errCutOutsideSplit, cut, orig.Start, orig.End)
 	}
-	if orig.Classification == db.ClassificationReSplit {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("split %d is already re_split", splitID)
+	if orig.Classification == models.ClassificationReSplit {
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("split %d is already re_split", splitID)
 	}
 
 	wd, _ := os.Getwd()
@@ -278,7 +219,7 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.
 
 	positions, err := db.NextSplitPositions(ctx, orig.RecordingID, 2)
 	if err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("allocate split positions: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("allocate split positions: %w", err)
 	}
 
 	radio := radioFromPath(ctx, orig.SourcePath)
@@ -290,14 +231,14 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.
 
 	outA, err := writeSegment(ctx, radio, inputPath, orig.Start, cut, positions[0])
 	if err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("write first segment: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("write first segment: %w", err)
 	}
 	outB, err := writeSegment(ctx, radio, inputPath, cut, orig.End, positions[1])
 	if err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("write second segment: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("write second segment: %w", err)
 	}
 
-	a := db.Split{
+	a := models.Split{
 		RecordingID:    orig.RecordingID,
 		SourcePath:     orig.SourcePath,
 		Index:          positions[0],
@@ -306,7 +247,7 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.
 		OutputPath:     outA,
 		Classification: orig.Classification,
 	}
-	b := db.Split{
+	b := models.Split{
 		RecordingID:    orig.RecordingID,
 		SourcePath:     orig.SourcePath,
 		Index:          positions[1],
@@ -317,17 +258,17 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original db.
 	}
 
 	if err := db.InsertSplit(ctx, a); err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("store first split: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("store first split: %w", err)
 	}
 	if err := db.InsertSplit(ctx, b); err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("store second split: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("store second split: %w", err)
 	}
 
 	// Mark the original only after the new splits exist so a failure leaves it
 	// fully playable.
-	orig.Classification = db.ClassificationReSplit
+	orig.Classification = models.ClassificationReSplit
 	if err := db.UpdateSplit(ctx, orig); err != nil {
-		return db.Split{}, db.Split{}, db.Split{}, fmt.Errorf("mark split re_split: %w", err)
+		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("mark split re_split: %w", err)
 	}
 
 	return orig, a, b, nil
@@ -347,10 +288,10 @@ const mergeWindowSeconds = 180.0
 // findAdjacentSplit returns the split that comes immediately before (prev=true)
 // or after (prev=false) the given split in the same source recording, matching
 // by boundary position.
-func findAdjacentSplit(ctx context.Context, cur db.Split, prev bool) (db.Split, error) {
+func findAdjacentSplit(ctx context.Context, cur models.Split, prev bool) (models.Split, error) {
 	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
-		return db.Split{}, fmt.Errorf("fetch recording splits: %w", err)
+		return models.Split{}, fmt.Errorf("fetch recording splits: %w", err)
 	}
 
 	for _, s := range splits {
@@ -369,7 +310,7 @@ func findAdjacentSplit(ctx context.Context, cur db.Split, prev bool) (db.Split, 
 	if prev {
 		dir = "previous"
 	}
-	return db.Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, cur.ID, dir)
+	return models.Split{}, fmt.Errorf("%w: split %d has no %s neighbor", errNoAdjacentSplit, cur.ID, dir)
 }
 
 // detectSilenceWindow runs ffmpeg silencedetect on a slice of the input file
@@ -390,7 +331,7 @@ func findAdjacentSplit(ctx context.Context, cur db.Split, prev bool) (db.Split, 
 // absolute timestamps (no offset needed), but ffmpeg then decodes the whole
 // file from the start, which is far too slow for long recordings, so the
 // fast-seek form is kept deliberately.
-func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, windowEnd float64) (chan silence, error) {
+func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, windowEnd float64) (chan models.Silence, error) {
 	cmd := exec.CommandContext(
 		ctx,
 		"ffmpeg",
@@ -416,7 +357,7 @@ func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, win
 		return nil, fmt.Errorf("start ffmpeg: %w", err)
 	}
 
-	silences := make(chan silence)
+	silences := make(chan models.Silence)
 	go func() {
 		var currentStart *float64
 		defer close(silences)
@@ -444,7 +385,7 @@ func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, win
 				// keyframe at or before windowStart), so the detected
 				// positions are relative to it; add windowStart to convert
 				// them back to absolute stream positions.
-				silences <- silence{Start: *currentStart + windowStart, End: end + windowStart}
+				silences <- models.Silence{Start: *currentStart + windowStart, End: end + windowStart}
 				currentStart = nil
 			}
 		}
@@ -465,11 +406,11 @@ func detectSilenceWindow(ctx context.Context, inputPath string, windowStart, win
 // the given boundaries (within float tolerance), excluding the current split.
 // It is used to detect when a silence-expanded merge absorbs an existing split
 // whose audio is now fully contained in the merged output.
-func findSplitByBounds(ctx context.Context, cur db.Split, start, end float64) (db.Split, bool) {
+func findSplitByBounds(ctx context.Context, cur models.Split, start, end float64) (models.Split, bool) {
 	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
 		slog.Error("find split by bounds", "err", err, "recording", cur.RecordingID, "start", start, "end", end)
-		return db.Split{}, false
+		return models.Split{}, false
 	}
 	for _, s := range splits {
 		if s.ID == cur.ID {
@@ -479,7 +420,7 @@ func findSplitByBounds(ctx context.Context, cur db.Split, start, end float64) (d
 			return s, true
 		}
 	}
-	return db.Split{}, false
+	return models.Split{}, false
 }
 
 // findSplitsWithinBounds returns the splits of the same recording that are
@@ -489,18 +430,18 @@ func findSplitByBounds(ctx context.Context, cur db.Split, start, end float64) (d
 // splits between the found silence and the current split), so every contained
 // split must be marked re_split or it would remain playable and overlap the
 // merged output.
-func findSplitsWithinBounds(ctx context.Context, cur db.Split, mergedID int64, newStart, newEnd float64) []db.Split {
+func findSplitsWithinBounds(ctx context.Context, cur models.Split, mergedID int64, newStart, newEnd float64) []models.Split {
 	splits, err := db.FetchSplitsForRecording(ctx, cur.RecordingID)
 	if err != nil {
 		slog.Error("find splits within bounds", "err", err, "recording", cur.RecordingID, "start", newStart, "end", newEnd)
 		return nil
 	}
-	var contained []db.Split
+	var contained []models.Split
 	for _, s := range splits {
 		if s.ID == cur.ID || s.ID == mergedID {
 			continue
 		}
-		if s.Classification == db.ClassificationReSplit {
+		if s.Classification == models.ClassificationReSplit {
 			continue
 		}
 		if s.Start >= newStart && s.End <= newEnd {
@@ -524,20 +465,20 @@ func findSplitsWithinBounds(ctx context.Context, cur db.Split, mergedID int64, n
 // split instead (the previous behavior), so a split with no real silence nearby
 // can still be joined with its neighbor. In that fallback case other holds the
 // adjacent split; in the silence-expansion case other is nil.
-func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, other *db.Split, merged db.Split, err error) {
+func mergeSplit(ctx context.Context, id int64, prev bool) (current models.Split, other *models.Split, merged models.Split, err error) {
 	cur, err := db.FetchSplit(ctx, id)
 	if err != nil {
-		return db.Split{}, nil, db.Split{}, err
+		return models.Split{}, nil, models.Split{}, err
 	}
-	if cur.Classification == db.ClassificationReSplit {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("split %d is already re_split", id)
+	if cur.Classification == models.ClassificationReSplit {
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("split %d is already re_split", id)
 	}
 
 	// Go back to the source recording this split came from and expand its
 	// boundaries to the next silence in the requested direction.
 	rec, err := db.FetchRecordingByID(ctx, cur.RecordingID)
 	if err != nil {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("fetch recording: %w", err)
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("fetch recording: %w", err)
 	}
 
 	wd, _ := os.Getwd()
@@ -560,11 +501,11 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 	// Find the silence boundary closest to the split in the requested
 	// direction: for prev, the silence whose end is just before cur.Start; for
 	// next, the silence whose start is just after cur.End.
-	var found *silence
+	var found *models.Silence
 	if windowEnd > windowStart {
 		silences, err := detectSilenceWindow(ctx, inputPath, windowStart, windowEnd)
 		if err != nil {
-			return db.Split{}, nil, db.Split{}, fmt.Errorf("detect silence window: %w", err)
+			return models.Split{}, nil, models.Split{}, fmt.Errorf("detect silence window: %w", err)
 		}
 		for s := range silences {
 			if prev {
@@ -601,10 +542,10 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 		// split so a split with no real silence nearby can still be joined.
 		adj, err := findAdjacentSplit(ctx, cur, prev)
 		if err != nil {
-			return db.Split{}, nil, db.Split{}, err
+			return models.Split{}, nil, models.Split{}, err
 		}
-		if adj.Classification == db.ClassificationReSplit {
-			return db.Split{}, nil, db.Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
+		if adj.Classification == models.ClassificationReSplit {
+			return models.Split{}, nil, models.Split{}, fmt.Errorf("adjacent split %d is already re_split", adj.ID)
 		}
 		other = &adj
 		if prev {
@@ -616,7 +557,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 
 	positions, err := db.NextSplitPositions(ctx, cur.RecordingID, 1)
 	if err != nil {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("allocate split position: %w", err)
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("allocate split position: %w", err)
 	}
 
 	radio := radioFromPath(ctx, cur.SourcePath)
@@ -628,10 +569,10 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 
 	out, err := writeSegment(ctx, radio, inputPath, start, end, positions[0])
 	if err != nil {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("write merged segment: %w", err)
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("write merged segment: %w", err)
 	}
 
-	merged = db.Split{
+	merged = models.Split{
 		RecordingID:    cur.RecordingID,
 		SourcePath:     cur.SourcePath,
 		Index:          positions[0],
@@ -644,7 +585,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 	// keep merged.ID available for the re_split marking below.
 	merged.ID = db.SplitID(merged.SourcePath, merged.Start, merged.End)
 	if err := db.InsertSplit(ctx, merged); err != nil {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("store merged split: %w", err)
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("store merged split: %w", err)
 	}
 
 	// Mark the source split(s) re_split only after the merged split exists so a
@@ -653,14 +594,14 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 	// source split(s) playable alongside the merged split (overlapping audio),
 	// which is non-destructive — no data is lost and the overlap can be
 	// resolved by re-merging or deleting the merged split.
-	cur.Classification = db.ClassificationReSplit
+	cur.Classification = models.ClassificationReSplit
 	if err := db.UpdateSplit(ctx, cur); err != nil {
-		return db.Split{}, nil, db.Split{}, fmt.Errorf("mark split re_split: %w", err)
+		return models.Split{}, nil, models.Split{}, fmt.Errorf("mark split re_split: %w", err)
 	}
 	if other != nil {
-		other.Classification = db.ClassificationReSplit
+		other.Classification = models.ClassificationReSplit
 		if err := db.UpdateSplit(ctx, *other); err != nil {
-			return db.Split{}, nil, db.Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
+			return models.Split{}, nil, models.Split{}, fmt.Errorf("mark adjacent split re_split: %w", err)
 		}
 	}
 
@@ -670,7 +611,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 	// playable and overlap the merged split. cur and other are already
 	// re_split in the DB by now, so they are skipped.
 	for _, s := range findSplitsWithinBounds(ctx, cur, merged.ID, start, end) {
-		s.Classification = db.ClassificationReSplit
+		s.Classification = models.ClassificationReSplit
 		if err := db.UpdateSplit(ctx, s); err != nil {
 			slog.Error("mark contained split re_split", "err", err, "split", s.ID, "merged", merged.ID)
 		}
@@ -679,7 +620,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current db.Split, oth
 	return cur, other, merged, nil
 }
 
-func detectSilence(ctx context.Context, inputPath string) (chan silence, error) {
+func detectSilence(ctx context.Context, inputPath string) (chan models.Silence, error) {
 	cmd := exec.CommandContext(
 		ctx,
 		"ffmpeg",
@@ -703,7 +644,7 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 		return nil, fmt.Errorf("start ffmpeg: %w", err)
 	}
 
-	silences := make(chan silence)
+	silences := make(chan models.Silence)
 	go func() {
 		var currentStart *float64
 		defer close(silences)
@@ -727,7 +668,7 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 				if err != nil {
 					continue
 				}
-				silences <- silence{Start: *currentStart, End: end}
+				silences <- models.Silence{Start: *currentStart, End: end}
 				currentStart = nil
 			}
 		}
@@ -748,8 +689,8 @@ func detectSilence(ctx context.Context, inputPath string) (chan silence, error) 
 // boundary is only made on a silence, so a clip never ends or begins while
 // the audio is still playing: the previous clip ends at the end of the
 // silence and the next clip begins at the start of that same silence.
-func chooseSplitBoundaries(silences chan silence) chan boundary {
-	boundaries := make(chan boundary)
+func chooseSplitBoundaries(silences chan models.Silence) chan models.Boundary {
+	boundaries := make(chan models.Boundary)
 	lastSilence := <-silences
 	first := true
 	go func() {
@@ -764,7 +705,7 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 				lastSilence = silence
 				continue
 			}
-			boundaries <- boundary{Start: lastSilence.Start, End: silence.End}
+			boundaries <- models.Boundary{Start: lastSilence.Start, End: silence.End}
 			lastSilence = silence
 		}
 	}()
@@ -776,9 +717,9 @@ func chooseSplitBoundaries(silences chan silence) chan boundary {
 // based on its duration in the original stream.
 func classifySplit(start, end float64) string {
 	if end-start < 60 {
-		return db.ClassificationNotSong
+		return models.ClassificationNotSong
 	}
-	return db.ClassificationLikelySong
+	return models.ClassificationLikelySong
 }
 
 // splitOutputDir returns the directory a source recording's split output files

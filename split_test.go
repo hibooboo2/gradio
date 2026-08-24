@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -160,10 +161,10 @@ func TestSplitRecordingRerunsWhenFolderMissing(t *testing.T) {
 }
 
 func TestClassifySplit(t *testing.T) {
-	require.Equal(t, db.ClassificationNotSong, classifySplit(0, 59.9))
-	require.Equal(t, db.ClassificationNotSong, classifySplit(10, 69))
-	require.Equal(t, db.ClassificationLikelySong, classifySplit(0, 60))
-	require.Equal(t, db.ClassificationLikelySong, classifySplit(100, 300))
+	require.Equal(t, models.ClassificationNotSong, classifySplit(0, 59.9))
+	require.Equal(t, models.ClassificationNotSong, classifySplit(10, 69))
+	require.Equal(t, models.ClassificationLikelySong, classifySplit(0, 60))
+	require.Equal(t, models.ClassificationLikelySong, classifySplit(100, 300))
 }
 
 func TestResplitSplit(t *testing.T) {
@@ -190,7 +191,7 @@ func TestResplitSplit(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	orig := db.Split{
+	orig := models.Split{
 		RecordingID: recID,
 		SourcePath:  fixture,
 		Index:       0,
@@ -217,14 +218,14 @@ func TestResplitSplit(t *testing.T) {
 
 	original, a, b, err := resplitSplit(t.Context(), orig.ID, 20)
 	require.NoError(t, err)
-	require.Equal(t, db.ClassificationReSplit, original.Classification)
+	require.Equal(t, models.ClassificationReSplit, original.Classification)
 	require.InDelta(t, orig.Start, a.Start, 0.001)
 	require.InDelta(t, 20, a.End, 0.001)
 	require.InDelta(t, 20, b.Start, 0.001)
 	require.InDelta(t, orig.End, b.End, 0.001)
 
 	// Both new splits produced their own files from the original recording.
-	for _, s := range []db.Split{a, b} {
+	for _, s := range []models.Split{a, b} {
 		info, err := os.Stat(s.OutputPath)
 		require.NoError(t, err)
 		require.Positive(t, info.Size())
@@ -241,7 +242,7 @@ func TestResplitSplit(t *testing.T) {
 
 	fetched, err := db.FetchSplit(t.Context(), orig.ID)
 	require.NoError(t, err)
-	require.Equal(t, db.ClassificationReSplit, fetched.Classification)
+	require.Equal(t, models.ClassificationReSplit, fetched.Classification)
 
 	// The database now has three splits: the original plus the two new ones.
 	all, err = db.FetchSplitsForRecording(t.Context(), recID)
@@ -255,7 +256,7 @@ func TestResplitSplit(t *testing.T) {
 	require.Len(t, allSplits, 3)
 	var aID int64
 	for _, s := range allSplits {
-		if s.Classification != db.ClassificationReSplit {
+		if s.Classification != models.ClassificationReSplit {
 			aID = s.ID
 			break
 		}
@@ -275,7 +276,7 @@ func TestResplitSplit(t *testing.T) {
 	batch, err := db.FetchGlobalShuffleBatch(t.Context(), 100, nil)
 	require.NoError(t, err)
 	for _, s := range batch {
-		require.NotEqual(t, db.ClassificationReSplit, s.Classification)
+		require.NotEqual(t, models.ClassificationReSplit, s.Classification)
 	}
 }
 
@@ -305,14 +306,14 @@ func TestMergeSplit(t *testing.T) {
 	require.NoError(t, err)
 
 	// Three adjacent splits spanning [0,20),[20,40),[40,60).
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 0, Start: 0, End: 20, OutputPath: filepath.Join(dir, "a.mp3")}))
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 1, Start: 20, End: 40, OutputPath: filepath.Join(dir, "b.mp3")}))
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{RecordingID: recID, SourcePath: fixture, Index: 2, Start: 40, End: 60, OutputPath: filepath.Join(dir, "c.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{RecordingID: recID, SourcePath: fixture, Index: 0, Start: 0, End: 20, OutputPath: filepath.Join(dir, "a.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{RecordingID: recID, SourcePath: fixture, Index: 1, Start: 20, End: 40, OutputPath: filepath.Join(dir, "b.mp3")}))
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{RecordingID: recID, SourcePath: fixture, Index: 2, Start: 40, End: 60, OutputPath: filepath.Join(dir, "c.mp3")}))
 
 	splits, err := db.FetchSplitsForRecording(t.Context(), recID)
 	require.NoError(t, err)
 	require.Len(t, splits, 3)
-	var middle db.Split
+	var middle models.Split
 	for _, s := range splits {
 		if s.Index == 1 {
 			middle = s
@@ -342,7 +343,7 @@ func TestMergeSplit(t *testing.T) {
 	for _, id := range []int64{cur.ID, adj.ID} {
 		f, err := db.FetchSplit(t.Context(), id)
 		require.NoError(t, err)
-		require.Equal(t, db.ClassificationReSplit, f.Classification)
+		require.Equal(t, models.ClassificationReSplit, f.Classification)
 	}
 
 	// DB now has 4 splits total (3 originals + 1 merged).
@@ -354,7 +355,7 @@ func TestMergeSplit(t *testing.T) {
 	// before it to join on; merging with the previous neighbor errors.
 	var mergedID int64
 	for _, s := range all {
-		if s.Classification != db.ClassificationReSplit {
+		if s.Classification != models.ClassificationReSplit {
 			mergedID = s.ID
 			break
 		}

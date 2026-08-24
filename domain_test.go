@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/hibooboo2/gradio/models"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,68 +51,68 @@ func TestRecorderSetDomainQueue(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rs := NewRecorderSet(ctx)
+	rs := models.NewRecorderSet(ctx)
 
 	// First station on the domain starts recording immediately.
-	res := rs.start("Alpha", srv.URL)
-	require.True(t, res.started)
-	require.False(t, res.queued)
-	require.Equal(t, "127.0.0.1", res.domain)
-	require.True(t, rs.isRecording("Alpha"))
-	require.True(t, rs.isRecordingDomain("127.0.0.1"))
+	res := rs.Start("Alpha", srv.URL)
+	require.True(t, res.Started)
+	require.False(t, res.Queued)
+	require.Equal(t, "127.0.0.1", res.Domain)
+	require.True(t, rs.IsRecording("Alpha"))
+	require.True(t, rs.IsRecordingDomain("127.0.0.1"))
 
 	// Second and third stations on the same domain are queued, not started.
-	res = rs.start("Beta", srv.URL)
-	require.False(t, res.started)
-	require.True(t, res.queued)
-	require.Equal(t, 1, res.queuePosition)
-	require.False(t, rs.isRecording("Beta"))
+	res = rs.Start("Beta", srv.URL)
+	require.False(t, res.Started)
+	require.True(t, res.Queued)
+	require.Equal(t, 1, res.QueuePosition)
+	require.False(t, rs.IsRecording("Beta"))
 
-	res = rs.start("Gamma", srv.URL)
-	require.True(t, res.queued)
-	require.Equal(t, 2, res.queuePosition)
+	res = rs.Start("Gamma", srv.URL)
+	require.True(t, res.Queued)
+	require.Equal(t, 2, res.QueuePosition)
 
 	// Re-requesting a station that is already queued reports its existing
 	// position instead of enqueueing it twice.
-	res = rs.start("Beta", srv.URL)
-	require.True(t, res.queued)
-	require.Equal(t, 1, res.queuePosition)
-	_, pos := rs.queueInfo("Beta")
+	res = rs.Start("Beta", srv.URL)
+	require.True(t, res.Queued)
+	require.Equal(t, 1, res.QueuePosition)
+	_, pos := rs.QueueInfo("Beta")
 	require.Equal(t, 1, pos)
 
 	// queueInfo reports the queued station's domain and 1-based position.
-	domain, pos := rs.queueInfo("Beta")
+	domain, pos := rs.QueueInfo("Beta")
 	require.Equal(t, "127.0.0.1", domain)
 	require.Equal(t, 1, pos)
-	domain, pos = rs.queueInfo("Gamma")
+	domain, pos = rs.QueueInfo("Gamma")
 	require.Equal(t, "127.0.0.1", domain)
 	require.Equal(t, 2, pos)
-	_, pos = rs.queueInfo("Alpha")
+	_, pos = rs.QueueInfo("Alpha")
 	require.Equal(t, 0, pos)
 
 	// A station on a different domain starts immediately.
-	res = rs.start("Other", "http://192.0.2.1:8080/stream")
-	require.True(t, res.started)
-	require.Equal(t, "192.0.2.1", res.domain)
+	res = rs.Start("Other", "http://192.0.2.1:8080/stream")
+	require.True(t, res.Started)
+	require.Equal(t, "192.0.2.1", res.Domain)
 
 	// When the active recorder finishes, the next queued station starts.
-	rs.deleteRecorder("Alpha")
-	require.False(t, rs.isRecording("Alpha"))
-	require.True(t, rs.isRecording("Beta"))
-	_, pos = rs.queueInfo("Beta")
+	rs.DeleteRecorder("Alpha")
+	require.False(t, rs.IsRecording("Alpha"))
+	require.True(t, rs.IsRecording("Beta"))
+	_, pos = rs.QueueInfo("Beta")
 	require.Equal(t, 0, pos)
-	domain, pos = rs.queueInfo("Gamma")
+	domain, pos = rs.QueueInfo("Gamma")
 	require.Equal(t, "127.0.0.1", domain)
 	require.Equal(t, 1, pos)
 
 	// And when that one finishes, the last queued station starts.
-	rs.deleteRecorder("Beta")
-	require.True(t, rs.isRecording("Gamma"))
-	_, pos = rs.queueInfo("Gamma")
+	rs.DeleteRecorder("Beta")
+	require.True(t, rs.IsRecording("Gamma"))
+	_, pos = rs.QueueInfo("Gamma")
 	require.Equal(t, 0, pos)
 
 	// Cleanup: stop the last recorder; the domain slot is freed.
-	rs.deleteRecorder("Gamma")
-	require.False(t, rs.isRecording("Gamma"))
-	require.False(t, rs.isRecordingDomain("127.0.0.1"))
+	rs.DeleteRecorder("Gamma")
+	require.False(t, rs.IsRecording("Gamma"))
+	require.False(t, rs.IsRecordingDomain("127.0.0.1"))
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +56,7 @@ func TestRoutes(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), "/tmp/routes-test.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID,
 		SourcePath:  "/tmp/routes-test.mp3",
 		Index:       0,
@@ -63,7 +64,7 @@ func TestRoutes(t *testing.T) {
 		End:         20.75,
 		OutputPath:  "/tmp/routes-test/output_00000.mp3",
 	}))
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID,
 		SourcePath:  "/tmp/routes-test.mp3",
 		Index:       1,
@@ -91,7 +92,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var updated db.Split
+		var updated models.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
 		require.InDelta(t, 11.25, updated.Start, 0.0001)
 		require.InDelta(t, 19.5, updated.End, 0.0001)
@@ -109,7 +110,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var updated db.Split
+		var updated models.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
 		require.InDelta(t, 20.75, updated.Start, 0.0001)
 		require.InDelta(t, 40.0, updated.End, 0.0001)
@@ -122,7 +123,7 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var split db.Split
+		var split models.Split
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&split))
 		require.Equal(t, first.ID, split.ID)
 	})
@@ -140,20 +141,20 @@ func TestRoutes(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var recs []db.Recording
+		var recs []models.Recording
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&recs))
 		require.NotEmpty(t, recs)
 	})
 }
 
-func listSplits(t *testing.T, baseURL string) []db.Split {
+func listSplits(t *testing.T, baseURL string) []models.Split {
 	t.Helper()
 	resp, err := authedClient().Get(baseURL + "/api/splits")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var splits []db.Split
+	var splits []models.Split
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&splits))
 	return splits
 }
@@ -176,12 +177,12 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), "/tmp/endpoints.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/endpoints.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/endpoints/output_00000.mp3",
 	}))
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/endpoints.mp3",
 		Index: 1, Start: 100, End: 200,
 		OutputPath: "split_music/TestRadio/endpoints/output_00001.mp3",
@@ -230,7 +231,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	resp, err = authedClient().Get(server.URL + "/api/shuffle")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var tracks []shuffleTrack
+	var tracks []models.ShuffleTrack
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&tracks))
 	require.Len(t, tracks, 2)
 	resp.Body.Close()
@@ -239,7 +240,7 @@ func TestSongPlayAndRatingEndpoints(t *testing.T) {
 	resp, err = authedClient().Get(server.URL + "/api/shuffle?exclude=" + strconv.FormatInt(splits[1].ID, 10))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var tracks2 []shuffleTrack
+	var tracks2 []models.ShuffleTrack
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&tracks2))
 	require.Len(t, tracks2, 1)
 	require.Equal(t, splits[0].ID, tracks2[0].ID)
@@ -280,15 +281,15 @@ func TestActiveRecordingsEndpoints(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var out struct {
-		Active []activeRecorder     `json:"active"`
-		Queued []queuedRecorderView `json:"queued"`
+		Active []models.ActiveRecorder     `json:"active"`
+		Queued []models.QueuedRecorderView `json:"queued"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
 	require.Empty(t, out.Active)
 	require.Empty(t, out.Queued)
 }
 
-func splitByIndex(t *testing.T, splits []db.Split, index int) db.Split {
+func splitByIndex(t *testing.T, splits []models.Split, index int) models.Split {
 	t.Helper()
 	for _, s := range splits {
 		if s.Index == index {
@@ -296,5 +297,5 @@ func splitByIndex(t *testing.T, splits []db.Split, index int) db.Split {
 		}
 	}
 	t.Fatalf("no split with index %d", index)
-	return db.Split{}
+	return models.Split{}
 }

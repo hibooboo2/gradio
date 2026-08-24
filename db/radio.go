@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/hibooboo2/gradio/models"
 )
 
 // UpsertRadioStations inserts or refreshes the given radio stations in bulk.
 // The stationuuid is the primary key, so re-syncing the same station replaces
 // its metadata instead of creating a duplicate row.
-func UpsertRadioStations(ctx context.Context, stations []RadioStation) error {
+func UpsertRadioStations(ctx context.Context, stations []models.RadioStation) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
@@ -43,7 +45,7 @@ func UpsertRadioStations(ctx context.Context, stations []RadioStation) error {
 }
 
 // FetchRadioStations returns every station in the radio_stations table.
-func FetchRadioStations(ctx context.Context) ([]RadioStation, error) {
+func FetchRadioStations(ctx context.Context) ([]models.RadioStation, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -60,9 +62,9 @@ func FetchRadioStations(ctx context.Context) ([]RadioStation, error) {
 	}
 	defer rows.Close()
 
-	var stations []RadioStation
+	var stations []models.RadioStation
 	for rows.Next() {
-		var s RadioStation
+		var s models.RadioStation
 		if err := rows.Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes); err != nil {
 			return nil, err
 		}
@@ -92,12 +94,12 @@ func FetchRadioStationURLs(ctx context.Context) (map[string]string, error) {
 
 // FetchRadioStationByUUID returns the station with the given uuid, or
 // sql.ErrNoRows when it does not exist.
-func FetchRadioStationByUUID(ctx context.Context, uuid string) (RadioStation, error) {
+func FetchRadioStationByUUID(ctx context.Context, uuid string) (models.RadioStation, error) {
 	if DB == nil {
-		return RadioStation{}, fmt.Errorf("nil db")
+		return models.RadioStation{}, fmt.Errorf("nil db")
 	}
 
-	var s RadioStation
+	var s models.RadioStation
 	err := DB.QueryRowContext(ctx,
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 		 FROM radio_stations
@@ -105,7 +107,7 @@ func FetchRadioStationByUUID(ctx context.Context, uuid string) (RadioStation, er
 		uuid,
 	).Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes)
 	if err != nil {
-		return RadioStation{}, err
+		return models.RadioStation{}, err
 	}
 	return s, nil
 }
@@ -159,7 +161,7 @@ func FetchFavoriteUUIDs(ctx context.Context) (map[string]struct{}, error) {
 
 // FetchFavoriteStations returns the favorited stations, ordered by when they
 // were favorited, newest first.
-func FetchFavoriteStations(ctx context.Context) ([]RadioStation, error) {
+func FetchFavoriteStations(ctx context.Context) ([]models.RadioStation, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
@@ -175,9 +177,9 @@ func FetchFavoriteStations(ctx context.Context) ([]RadioStation, error) {
 	}
 	defer rows.Close()
 
-	var stations []RadioStation
+	var stations []models.RadioStation
 	for rows.Next() {
-		var s RadioStation
+		var s models.RadioStation
 		if err := rows.Scan(&s.StationUUID, &s.Name, &s.URLResolved, &s.Favicon, &s.Tags, &s.CountryCode, &s.LanguageCodes); err != nil {
 			return nil, err
 		}

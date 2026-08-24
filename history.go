@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 )
 
 // historyDefaultLimit is how many history entries the view shows by default.
@@ -15,16 +16,6 @@ const historyDefaultLimit = 100
 // historyMaxLimit caps the ?limit= query param so a single request cannot ask
 // for an unbounded history dump.
 const historyMaxLimit = 1000
-
-// historyViewData is the data model for the play history tab fragment.
-type historyViewData struct {
-	Sort    string // "recency" or "frequency"
-	Group   bool   // group entries by radio
-	Limit   int
-	Total   int // number of distinct songs shown
-	Entries []db.HistoryEntry
-	Groups  []db.RadioHistoryGroup
-}
 
 // historyViewTemplate renders the htmx fragment for the play history tab. It
 // shows the songs that were played, sorted by recency or frequency, optionally
@@ -132,8 +123,8 @@ func historyParams(r *http.Request) (sort string, group bool, limit int) {
 func handleHistoryView(w http.ResponseWriter, r *http.Request) {
 	sort, group, limit := historyParams(r)
 
-	var entries []db.HistoryEntry
-	var groups []db.RadioHistoryGroup
+	var entries []models.HistoryEntry
+	var groups []models.RadioHistoryGroup
 	var err error
 
 	if group {
@@ -158,7 +149,7 @@ func handleHistoryView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := historyViewTemplate.Execute(w, historyViewData{
+	if err := historyViewTemplate.Execute(w, models.HistoryViewData{
 		Sort:    sort,
 		Group:   group,
 		Limit:   limit,
@@ -186,7 +177,7 @@ func handleHistoryJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var entries []db.HistoryEntry
+	var entries []models.HistoryEntry
 	var err error
 	if sort == "frequency" {
 		entries, err = db.FetchPlayHistoryFrequency(r.Context(), limit)

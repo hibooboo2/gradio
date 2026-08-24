@@ -15,11 +15,12 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 )
 
 // derivedSongTitle produces the default human-friendly label for a split's
 // output file, e.g. "Slotex · gradio-2026-08-19_09-47-01 #3".
-func derivedSongTitle(s db.Split) string {
+func derivedSongTitle(s models.Split) string {
 	base := strings.TrimSuffix(filepath.Base(s.SourcePath), filepath.Ext(s.SourcePath))
 	radio := radioFromPath(context.Background(), s.SourcePath)
 	return fmt.Sprintf("%s · %s #%d", radio, base, s.Index+1)
@@ -28,7 +29,7 @@ func derivedSongTitle(s db.Split) string {
 // songTitle produces the display label for a split. A user-set custom title
 // (a display-only rename) wins; otherwise the title is derived from the source
 // file name and stream position.
-func songTitle(s db.Split) string {
+func songTitle(s models.Split) string {
 	if s.CustomTitle != "" {
 		return s.CustomTitle
 	}
@@ -40,33 +41,6 @@ func songTitle(s db.Split) string {
 func musicURL(outputPath string) string {
 	rel := strings.TrimPrefix(filepath.ToSlash(outputPath), "split_music/")
 	return "/music/" + rel
-}
-
-// playlistsViewData is the data model for the play lists tab fragment.
-type playlistsViewData struct {
-	Playlists []playlistViewItem
-	AllSongs  []db.Split
-	Expanded  int64
-}
-
-// playlistViewItem pairs a playlist with the songs shown when it is expanded.
-type playlistViewItem struct {
-	db.Playlist
-	Songs []db.PlaylistSong
-}
-
-// playerViewData is the data model for the player tab fragment.
-type playerViewData struct {
-	Playlist  db.Playlist
-	Songs     []db.PlaylistSong
-	StartSong int64
-	// Subtitle overrides the default "Playlist · <name>" subtitle, e.g. for a
-	// radio which shows "Radio · <name>".
-	Subtitle string
-	// QueueKey uniquely identifies the loaded queue (e.g. "radio:Slotex" or
-	// "playlist:123") so the client can keep the currently playing queue when
-	// the view is re-rendered instead of restarting it.
-	QueueKey string
 }
 
 // radioQueueSize is how many random splits are loaded into a radio's queue.
@@ -81,8 +55,8 @@ var viewFuncs = template.FuncMap{
 	"musicURL":              musicURL,
 	"songTitle":             songTitle,
 	"derivedSongTitle":      derivedSongTitle,
-	"clsLabel":              clsLabel,
-	"classificationOptions": func() []classificationOption { return classificationOptions },
+	"clsLabel":              models.ClsLabel,
+	"classificationOptions": func() []models.ClassificationOption { return models.ClassificationOptions },
 	"urlq":                  url.QueryEscape,
 	"timeStr": func(seconds float64) string {
 		if seconds < 0 {
@@ -326,27 +300,6 @@ var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFu
 </div>
 `))
 
-// playerEmptyData is the data model for the player empty state.
-type playerEmptyData struct {
-	Radios []db.Radio
-}
-
-// shuffleTrack is one track in the global shuffle queue, as returned by the
-// JSON continuation endpoint so the player can keep fetching fresh batches of
-// least-played songs without a full view swap.
-type shuffleTrack struct {
-	ID             int64   `json:"id"`
-	Title          string  `json:"title"`
-	DerivedTitle   string  `json:"derived_title"`
-	CustomTitle    string  `json:"custom_title"`
-	Src            string  `json:"src"`
-	Start          float64 `json:"start"`
-	End            float64 `json:"end"`
-	Classification string  `json:"classification"`
-	Plays          int     `json:"plays"`
-	Rating         int     `json:"rating"`
-}
-
 // parseSplitIDs parses a comma-separated list of split ids, ignoring any
 // non-numeric entries.
 func parseSplitIDs(raw string) []int64 {
@@ -373,10 +326,10 @@ func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
 		return
 	}
 
-	items := make([]playlistViewItem, 0, len(playlists))
-	var expandedSongs []db.PlaylistSong
+	items := make([]models.PlaylistViewItem, 0, len(playlists))
+	var expandedSongs []models.PlaylistSong
 	for _, p := range playlists {
-		item := playlistViewItem{Playlist: p}
+		item := models.PlaylistViewItem{Playlist: p}
 		if p.ID == expand {
 			songs, err := db.FetchPlaylistSongs(r.Context(), p.ID)
 			if err != nil {
@@ -399,7 +352,7 @@ func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
 
 	_ = expandedSongs
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := playlistsViewTemplate.Execute(w, playlistsViewData{
+	if err := playlistsViewTemplate.Execute(w, models.PlaylistsViewData{
 		Playlists: items,
 		AllSongs:  allSongs,
 		Expanded:  expand,
@@ -526,9 +479,9 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		songs := make([]db.PlaylistSong, 0, len(splits))
+		songs := make([]models.PlaylistSong, 0, len(splits))
 		for i, s := range splits {
-			songs = append(songs, db.PlaylistSong{
+			songs = append(songs, models.PlaylistSong{
 				SplitID:  s.ID,
 				Position: i,
 				Split:    s,
@@ -538,8 +491,8 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerViewTemplate.Execute(w, playerViewData{
-			Playlist: db.Playlist{Name: "All Music"},
+		if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+			Playlist: models.Playlist{Name: "All Music"},
 			Songs:    songs,
 			Subtitle: "Global Shuffle",
 			QueueKey: "shuffle",
@@ -557,9 +510,9 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		songs := make([]db.PlaylistSong, 0, len(splits))
+		songs := make([]models.PlaylistSong, 0, len(splits))
 		for i, s := range splits {
-			songs = append(songs, db.PlaylistSong{
+			songs = append(songs, models.PlaylistSong{
 				SplitID:  s.ID,
 				Position: i,
 				Split:    s,
@@ -567,8 +520,8 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerViewTemplate.Execute(w, playerViewData{
-			Playlist: db.Playlist{Name: radio},
+		if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+			Playlist: models.Playlist{Name: radio},
 			Songs:    songs,
 			Subtitle: "Radio · " + radio,
 			QueueKey: "radio:" + radio,
@@ -585,7 +538,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 			slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerEmptyTemplate.Execute(w, playerEmptyData{Radios: radios}); err != nil {
+		if err := playerEmptyTemplate.Execute(w, models.PlayerEmptyData{Radios: radios}); err != nil {
 			slog.ErrorContext(r.Context(), "render player empty", "err", err)
 		}
 		return
@@ -599,7 +552,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 				slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := playerEmptyTemplate.Execute(w, playerEmptyData{Radios: radios}); err != nil {
+			if err := playerEmptyTemplate.Execute(w, models.PlayerEmptyData{Radios: radios}); err != nil {
 				slog.ErrorContext(r.Context(), "render player empty", "err", err)
 			}
 			return
@@ -624,7 +577,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := playerViewTemplate.Execute(w, playerViewData{
+	if err := playerViewTemplate.Execute(w, models.PlayerViewData{
 		Playlist:  playlist,
 		Songs:     songs,
 		StartSong: startSplit,
@@ -651,9 +604,9 @@ func handleShuffleJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tracks := make([]shuffleTrack, 0, len(splits))
+	tracks := make([]models.ShuffleTrack, 0, len(splits))
 	for _, s := range splits {
-		tracks = append(tracks, shuffleTrack{
+		tracks = append(tracks, models.ShuffleTrack{
 			ID:             s.ID,
 			Title:          songTitle(s),
 			DerivedTitle:   derivedSongTitle(s),

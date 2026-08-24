@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/hibooboo2/gradio/models"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ func TestPlayHistory(t *testing.T) {
 
 	splitIDs := make([]int64, 0, 2)
 	for i := 0; i < 2; i++ {
-		require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+		require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 			RecordingID: recID,
 			SourcePath:  "/tmp/history.mp3",
 			Index:       i,
@@ -104,7 +105,7 @@ func TestHistoryEndpoints(t *testing.T) {
 
 	recID, err := db.InsertRecording(t.Context(), "/tmp/history-endpoints.mp3", "TestRadio", time.Now(), 123)
 	require.NoError(t, err)
-	require.NoError(t, db.InsertSplit(t.Context(), db.Split{
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
 		RecordingID: recID, SourcePath: "/tmp/history-endpoints.mp3",
 		Index: 0, Start: 0, End: 100,
 		OutputPath: "split_music/TestRadio/history-endpoints/output_00000.mp3",
@@ -128,7 +129,7 @@ func TestHistoryEndpoints(t *testing.T) {
 	resp, err := authedClient().Get(server.URL + "/api/history?sort=frequency")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var entries []db.HistoryEntry
+	var entries []models.HistoryEntry
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&entries))
 	require.Len(t, entries, 1)
 	require.Equal(t, splits[0].ID, entries[0].Split.ID)
@@ -140,7 +141,7 @@ func TestHistoryEndpoints(t *testing.T) {
 	resp, err = authedClient().Get(server.URL + "/api/history?group=radio")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var groups []db.RadioHistoryGroup
+	var groups []models.RadioHistoryGroup
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&groups))
 	require.Len(t, groups, 1)
 	require.Equal(t, "TestRadio", groups[0].Radio)
