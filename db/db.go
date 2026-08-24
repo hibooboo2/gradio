@@ -328,7 +328,7 @@ const MaxDownloadsKey = "max_downloads"
 // GetMaxDownloads returns the configured maximum number of concurrent music
 // downloads. A missing or zero value means unlimited.
 func GetMaxDownloads(ctx context.Context) (int, error) {
-	return GetSetting(ctx, MaxDownloadsKey, 0)
+	return GetSetting(ctx, MaxDownloadsKey, 5)
 }
 
 // SettingEntry is one row of the settings table: a key, its raw JSON value,
