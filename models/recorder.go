@@ -636,7 +636,7 @@ func (r *Recorder) write(p []byte) (int, error) {
 func (r *Recorder) storeToDisk() bool {
 	slog.Debug("Callied storeToDisk", "name", r.RadioName)
 	if r.Buffer != nil {
-		if r.Buffer.Len() < 1024*1024*1024*5 {
+		if r.Buffer.Len() < 1024*1024*5 {
 			slog.Info("Not storing recording from buffer", "size", r.Buffer.Len())
 			return false
 		}
