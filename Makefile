@@ -31,7 +31,7 @@ docker-db:
 
 run: docker-db
 	go build -o gradio
-	DATABASE_URL=postgres://root@localhost:$(COCKROACH_PORT)/defaultdb?sslmode=disable ./gradio -http 8000 -watch -record
+	DATABASE_URL=postgres://root@localhost:$(COCKROACH_PORT)/defaultdb?sslmode=disable ./gradio -watch ##-http 8000 -record
 
 build:
 	GOOS=windows go build -o gradio

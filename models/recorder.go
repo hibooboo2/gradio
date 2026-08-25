@@ -604,7 +604,7 @@ func (r *Recorder) RecordOnce(ctx context.Context) error {
 				slog.ErrorContext(ctx, "Failed to read body", "err", err, "radioName", r.RadioName)
 				return err
 			}
-			return nil
+			return fmt.Errorf("got error from read: %w", err)
 		}
 
 		select {
