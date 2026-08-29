@@ -64,16 +64,11 @@ func main() {
 			// Populate the recording urls from the radio_stations table. When the
 			// table is empty on first run, load the stations from initstations.json so
 			// all stations are available; otherwise the last sync is reused.
-			stations, err := db.FetchRadioStations(ctx, "")
+			n, err := syncRadioStations(ctx)
 			if err != nil {
-				slog.ErrorContext(ctx, "load radio stations", "err", err)
-			} else if len(stations) == 0 {
-				n, err := syncRadioStations(ctx)
-				if err != nil {
-					slog.ErrorContext(ctx, "sync radio stations", "err", err)
-				} else {
-					slog.InfoContext(ctx, "synced radio stations", "count", n)
-				}
+				slog.ErrorContext(ctx, "sync radio stations", "err", err)
+			} else {
+				slog.InfoContext(ctx, "synced radio stations", "count", n)
 			}
 
 			return nil

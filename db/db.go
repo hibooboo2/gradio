@@ -83,7 +83,7 @@ func RadioHash(name string) string {
 // The directory is keyed by the hash of the station name rather than the name
 // itself, so any station name is safe to use on disk.
 func RecordingsDir(radio string) string {
-	return filepath.Join("/recordings", RadioHash(radio))
+	return filepath.Join("recordings", RadioHash(radio))
 }
 
 // IsHexHash reports whether s is a 64-character hex string, i.e. a SHA-256
