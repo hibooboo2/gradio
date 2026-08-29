@@ -1,14 +1,13 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,18 +33,18 @@ func TestContentIDs(t *testing.T) {
 func TestRecordingDBLifecycle(t *testing.T) {
 	// Ensure the dedicated test database exists (connect to the default db to
 	// create it, since CockroachDB won't create it implicitly).
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	// Point the package DB at the dedicated test database so we don't touch the
 	// real recordings, then start from a clean slate.
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	// Recreate the schema on the freshly-dropped tables.
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
@@ -140,16 +139,16 @@ func TestRecordingDBLifecycle(t *testing.T) {
 // TestSongPlaysAndGlobalShuffle covers the song_plays table (play counts and
 // ratings) and the global shuffle batch selection.
 func TestSongPlaysAndGlobalShuffle(t *testing.T) {
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
@@ -239,16 +238,16 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 // TestRadioStationDB covers the radio_stations table: bulk upsert, idempotent
 // re-sync, and the name -> url_resolved lookup map.
 func TestRadioStationDB(t *testing.T) {
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
@@ -291,7 +290,7 @@ func TestRadioStationDB(t *testing.T) {
 	require.Len(t, urls, 2)
 
 	// An empty table makes radioURLs fall back to the built-in defaults.
-	_, err = db.DB.ExecContext(t.Context(), `DELETE FROM radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DELETE FROM radio_stations;`)
 	require.NoError(t, err)
 	require.Equal(t, defaultURLs(), radioURLs(t.Context()))
 }

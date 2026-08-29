@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/views"
+	"github.com/jackc/pgx/v5"
 )
 
 // handleSettingsView renders the Settings tab fragment listing every stored
@@ -46,7 +46,7 @@ func handleGetSettingJSON(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	value, err := db.GetSettingRaw(r.Context(), key)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "setting not found")
 			return
 		}
@@ -94,7 +94,7 @@ func handleDeleteSettingJSON(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	err := db.DeleteSetting(r.Context(), key)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "setting not found")
 			return
 		}

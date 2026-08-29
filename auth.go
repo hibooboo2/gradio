@@ -1,11 +1,11 @@
 package main
 
 import (
-	"database/sql"
 	"log/slog"
 	"net/http"
 
 	"github.com/hibooboo2/gradio/db"
+	"github.com/jackc/pgx/v5"
 )
 
 // requireAuth enforces HTTP basic auth on the UI and API. Every request must
@@ -31,7 +31,7 @@ func requireAuth(next http.Handler) http.Handler {
 
 		user, err := db.FetchUserByName(r.Context(), username)
 		switch {
-		case err == sql.ErrNoRows:
+		case err == pgx.ErrNoRows:
 			// Unknown user: create one and log them in.
 			if err := db.CreateUser(r.Context(), username, password); err != nil {
 				slog.ErrorContext(r.Context(), "create user", "err", err, "user", username)

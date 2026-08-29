@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,23 +11,23 @@ import (
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
 // TestPlayHistory covers the play_history table: every db.RecordPlay appends a
 // row, and the recency/frequency/grouped fetch helpers aggregate it correctly.
 func TestPlayHistory(t *testing.T) {
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
@@ -57,7 +56,7 @@ func TestPlayHistory(t *testing.T) {
 	require.NoError(t, db.RecordPlay(t.Context(), splitIDs[1]))
 
 	var count int
-	require.NoError(t, db.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM play_history`).Scan(&count))
+	require.NoError(t, db.DB.QueryRow(t.Context(), `SELECT count(*) FROM play_history`).Scan(&count))
 	require.Equal(t, 3, count)
 
 	// Recency: both songs, most recently played first (splitIDs[1] was last).
@@ -90,16 +89,16 @@ func TestPlayHistory(t *testing.T) {
 // TestHistoryEndpoints covers the play history over HTTP: the JSON API
 // (?sort, ?group) and the /history/view fragment.
 func TestHistoryEndpoints(t *testing.T) {
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)
-	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
 	require.NoError(t, err)
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
 	require.NoError(t, err)
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 

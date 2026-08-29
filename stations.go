@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,6 +8,7 @@ import (
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
 	"github.com/hibooboo2/gradio/views"
+	"github.com/jackc/pgx/v5"
 )
 
 // handleStationsView renders the Radio Stations tab fragment listing every
@@ -86,7 +86,7 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
 	if _, err := db.FetchRadioStationByUUID(r.Context(), uuid); err != nil {
-		if err == sql.ErrNoRows {
+		if err == pgx.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
 			return
 		}
@@ -147,7 +147,7 @@ func wantsJSON(r *http.Request) bool {
 func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 	station, err := db.FetchRadioStationByUUID(r.Context(), r.PathValue("uuid"))
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err == pgx.ErrNoRows {
 			http.Error(w, "station not found", http.StatusNotFound)
 			return
 		}

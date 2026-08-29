@@ -7,7 +7,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -20,7 +19,8 @@ import (
 	"time"
 
 	"github.com/hibooboo2/gradio/models"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -32,7 +32,7 @@ const defaultDBPath = "postgres://root@localhost:26257/defaultdb?sslmode=disable
 var (
 	// DB is the shared database handle used by every query in this package. It
 	// is set by CreateDBHandle.
-	DB *sql.DB
+	DB *pgxpool.Pool
 
 	dbPath = defaultDBPath
 )
@@ -114,7 +114,7 @@ func RadioDisplayName(ctx context.Context, dir string) string {
 	}
 
 	var radio string
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT radio FROM recordings WHERE source_path LIKE $1 LIMIT 1`,
 		"%"+dir+"/%",
 	).Scan(&radio)
@@ -126,15 +126,15 @@ func RadioDisplayName(ctx context.Context, dir string) string {
 
 // CreateDBHandle opens the database connection, ensures the schema exists, and
 // stores the handle in DB. It returns the handle for callers that want it.
-func CreateDBHandle() *sql.DB {
+func CreateDBHandle() *pgxpool.Pool {
 	dsn := dbPath
 	if env := os.Getenv("DATABASE_URL"); env != "" {
 		dsn = env
 	}
 
-	db, err := sql.Open("pgx", dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		slog.Error("recordings: open db", "err", err)
+		slog.Error("recordings: parse db config", "err", err)
 		os.Exit(1)
 		return nil
 	}
@@ -142,8 +142,15 @@ func CreateDBHandle() *sql.DB {
 	// CockroachDB handles concurrent writers fine, so unlike the old
 	// sqlite driver there is no need to serialize access to a single
 	// connection.
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	cfg.MaxConns = 10
+	cfg.MinConns = 5
+
+	db, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		slog.Error("recordings: open db", "err", err)
+		os.Exit(1)
+		return nil
+	}
 
 	if err := CreateSchema(context.Background(), db); err != nil {
 		slog.Error("recordings: create tables", "err", err)
@@ -158,8 +165,8 @@ func CreateDBHandle() *sql.DB {
 // CreateSchema ensures the recordings and splits tables (and their indexes)
 // exist. It is safe to call multiple times and is re-used by tests to reset a
 // clean schema after dropping tables.
-func CreateSchema(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, `
+func CreateSchema(ctx context.Context, db *pgxpool.Pool) error {
+	_, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS recordings (
 			id          INT PRIMARY KEY,
 			source_path STRING NOT NULL,
@@ -258,7 +265,7 @@ func CreateSchema(ctx context.Context, db *sql.DB) error {
 	// Migration for databases created before custom_title existed. Fresh
 	// databases already have the column from the CREATE TABLE above, so this
 	// is a no-op for them.
-	_, err = db.ExecContext(ctx, `ALTER TABLE splits ADD COLUMN IF NOT EXISTS custom_title STRING NOT NULL DEFAULT ''`)
+	_, err = db.Exec(ctx, `ALTER TABLE splits ADD COLUMN IF NOT EXISTS custom_title STRING NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -275,7 +282,7 @@ func SetSetting[T any](ctx context.Context, key string, value T) error {
 		return fmt.Errorf("marshal setting %q: %w", key, err)
 	}
 
-	_, err = DB.ExecContext(ctx,
+	_, err = DB.Exec(ctx,
 		`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::JSONB, now())
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()`,
 		key, string(data),
@@ -296,11 +303,11 @@ func GetSetting[T any](ctx context.Context, key string, fallback T) (T, error) {
 	}
 
 	var raw []byte
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT value FROM settings WHERE key = $1`,
 		key,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		if serr := SetSetting(ctx, key, fallback); serr != nil {
 			return fallback, fmt.Errorf("setting fallback %q: %w", key, serr)
 		}
@@ -347,7 +354,7 @@ func ListSettings(ctx context.Context) ([]SettingEntry, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT key, value, updated_at FROM settings ORDER BY key ASC`,
 	)
 	if err != nil {
@@ -367,32 +374,32 @@ func ListSettings(ctx context.Context) ([]SettingEntry, error) {
 	return entries, rows.Err()
 }
 
-// DeleteSetting removes a setting by key. It returns sql.ErrNoRows when the
+// DeleteSetting removes a setting by key. It returns pgx.ErrNoRows when the
 // key does not exist.
 func DeleteSetting(ctx context.Context, key string) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
 
-	res, err := DB.ExecContext(ctx, `DELETE FROM settings WHERE key = $1`, key)
+	res, err := DB.Exec(ctx, `DELETE FROM settings WHERE key = $1`, key)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return sql.ErrNoRows
+	if res.RowsAffected() == 0 {
+		return pgx.ErrNoRows
 	}
 	return nil
 }
 
 // GetSettingRaw returns a setting's value as raw JSON without unmarshaling it.
-// It returns sql.ErrNoRows when the key has not been set.
+// It returns pgx.ErrNoRows when the key has not been set.
 func GetSettingRaw(ctx context.Context, key string) (json.RawMessage, error) {
 	var raw json.RawMessage
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT value FROM settings WHERE key = $1`,
 		key,
 	).Scan(&raw)
@@ -414,18 +421,18 @@ func InsertRecording(ctx context.Context, sourcePath, radio string, recordedAt t
 	id := RecordingID(sourcePath)
 
 	var existing int64
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id FROM recordings WHERE source_path = $1`,
 		sourcePath,
 	).Scan(&existing)
 	switch {
 	case err == nil:
 		return existing, nil
-	case err != sql.ErrNoRows:
+	case err != pgx.ErrNoRows:
 		return 0, err
 	}
 
-	_, err = DB.ExecContext(ctx,
+	_, err = DB.Exec(ctx,
 		`INSERT INTO recordings (id, source_path, radio, recorded_at, size_bytes)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -445,7 +452,7 @@ func FetchPendingRecordings(ctx context.Context) ([]models.Recording, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE status = $1 OR status = $2
@@ -479,7 +486,7 @@ func SetRecordingStatus(ctx context.Context, id int64, status models.RecordingSt
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := DB.ExecContext(ctx, `UPDATE recordings SET status = $1 WHERE id = $2`, status, id)
+	_, err := DB.Exec(ctx, `UPDATE recordings SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
 
@@ -491,7 +498,7 @@ func MarkRecordingSplit(ctx context.Context, recordingID int64, splitFolder stri
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO recording_splits (recording_id, split_folder) VALUES ($1, $2)
 		 ON CONFLICT (recording_id) DO UPDATE SET split_folder = excluded.split_folder`,
 		recordingID, splitFolder,
@@ -507,11 +514,11 @@ func RecordingSplitFolder(ctx context.Context, recordingID int64) (folder string
 		return "", false, fmt.Errorf("nil db")
 	}
 
-	err = DB.QueryRowContext(ctx,
+	err = DB.QueryRow(ctx,
 		`SELECT split_folder FROM recording_splits WHERE recording_id = $1`,
 		recordingID,
 	).Scan(&folder)
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		return "", false, nil
 	}
 	if err != nil {
@@ -533,7 +540,7 @@ func InsertSplit(ctx context.Context, s models.Split) error {
 		s.ID = SplitID(s.SourcePath, s.Start, s.End)
 	}
 
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO splits (id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -550,7 +557,7 @@ func FetchSplitsForRecording(ctx context.Context, recordingID int64) ([]models.S
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE recording_id = $1
@@ -581,7 +588,7 @@ func FetchAllSplits(ctx context.Context) ([]models.Split, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title
 		 FROM splits s
 		 ORDER BY s.created_at DESC, s.id`,
@@ -610,7 +617,7 @@ func FetchSplit(ctx context.Context, id int64) (models.Split, error) {
 	}
 
 	var s models.Split
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE id = $1`,
@@ -631,7 +638,7 @@ func FetchSplitByOutputPath(ctx context.Context, outputPath string) (models.Spli
 	}
 
 	var s models.Split
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
 		 FROM splits
 		 WHERE output_path = $1`,
@@ -650,7 +657,7 @@ func UpdateSplit(ctx context.Context, s models.Split) error {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`UPDATE splits
 		 SET start_seconds = $1, end_seconds = $2, classification = $3, custom_title = $4
 		 WHERE id = $5`,
@@ -667,7 +674,7 @@ func FetchRecordingByPath(ctx context.Context, sourcePath string) (models.Record
 
 	var r models.Recording
 	var recordedAt string
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE source_path = $1`,
@@ -691,7 +698,7 @@ func FetchRecordingByID(ctx context.Context, id int64) (models.Recording, error)
 
 	var r models.Recording
 	var recordedAt string
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 WHERE id = $1`,
@@ -713,7 +720,7 @@ func FetchAllRecordings(ctx context.Context) ([]models.Recording, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT id, source_path, radio, recorded_at, size_bytes, status
 		 FROM recordings
 		 ORDER BY created_at DESC, id`,
@@ -747,7 +754,7 @@ func FetchRadios(ctx context.Context) ([]models.Radio, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT r.radio, count(s.id)
 		 FROM recordings r
 		 JOIN splits s ON s.recording_id = r.id
@@ -778,7 +785,7 @@ func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]models.Sp
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
@@ -830,7 +837,7 @@ func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([
 		excludeArg = "{" + strings.Join(parts, ",") + "}"
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
 		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
 		 FROM splits s
@@ -865,7 +872,7 @@ func RecordPlay(ctx context.Context, splitID int64) error {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO song_plays (split_id, plays) VALUES ($1, 1)
 		 ON CONFLICT (split_id) DO UPDATE SET plays = song_plays.plays + 1, updated_at = now()`,
 		splitID,
@@ -885,7 +892,7 @@ func InsertPlayHistory(ctx context.Context, splitID int64) error {
 		return fmt.Errorf("nil db")
 	}
 
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO play_history (split_id) VALUES ($1)`,
 		splitID,
 	)
@@ -904,7 +911,7 @@ func SetRating(ctx context.Context, splitID int64, wasLiked bool) error {
 	if !wasLiked {
 		delta = -1
 	}
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO song_plays (split_id, plays, rating) VALUES ($1, 0, $2)
 		 ON CONFLICT (split_id) DO UPDATE SET rating = song_plays.rating + $2, updated_at = now()`,
 		splitID, delta,
@@ -919,11 +926,11 @@ func FetchSongStats(ctx context.Context, splitID int64) (plays int, rating int, 
 		return 0, 0, fmt.Errorf("nil db")
 	}
 
-	err = DB.QueryRowContext(ctx,
+	err = DB.QueryRow(ctx,
 		`SELECT plays, rating FROM song_plays WHERE split_id = $1`,
 		splitID,
 	).Scan(&plays, &rating)
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		return 0, 0, nil
 	}
 	if err != nil {
@@ -939,16 +946,16 @@ func NextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, e
 		return nil, fmt.Errorf("nil db")
 	}
 
-	var maxPos sql.NullInt64
-	if err := DB.QueryRowContext(ctx,
-		`SELECT MAX(position) FROM splits WHERE recording_id = $1`,
+	var maxPos int64
+	if err := DB.QueryRow(ctx,
+		`SELECT COALESCE(MAX(position), 0) FROM splits WHERE recording_id = $1`,
 		recordingID,
 	).Scan(&maxPos); err != nil {
 		return nil, err
 	}
 
 	pos := make([]int, n)
-	next := int(maxPos.Int64)
+	next := int(maxPos)
 	for i := range pos {
 		next++
 		pos[i] = next
@@ -956,7 +963,7 @@ func NextSplitPositions(ctx context.Context, recordingID int64, n int) ([]int, e
 	return pos, nil
 }
 
-// FetchUserByName returns the user with the given name, or sql.ErrNoRows when
+// FetchUserByName returns the user with the given name, or pgx.ErrNoRows when
 // no such user exists.
 func FetchUserByName(ctx context.Context, name string) (models.User, error) {
 	if DB == nil {
@@ -964,7 +971,7 @@ func FetchUserByName(ctx context.Context, name string) (models.User, error) {
 	}
 
 	var u models.User
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT id, name, password FROM users WHERE name = $1`,
 		name,
 	).Scan(&u.ID, &u.Name, &u.Password)
@@ -987,7 +994,7 @@ func CreateUser(ctx context.Context, name, password string) error {
 		return err
 	}
 
-	_, err = DB.ExecContext(ctx,
+	_, err = DB.Exec(ctx,
 		`INSERT INTO users (name, password) VALUES ($1, $2)`,
 		name, string(hash),
 	)

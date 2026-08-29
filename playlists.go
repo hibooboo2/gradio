@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
 	"github.com/hibooboo2/gradio/views"
+	"github.com/jackc/pgx/v5"
 )
 
 // derivedSongTitle produces the default human-friendly label for a split's
@@ -295,7 +295,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 
 	playlist, err := db.FetchPlaylist(r.Context(), playlistID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err == pgx.ErrNoRows {
 			radios, rerr := db.FetchRadios(r.Context())
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "list radios", "err", rerr)

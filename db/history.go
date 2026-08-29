@@ -2,10 +2,10 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/hibooboo2/gradio/models"
+	"github.com/jackc/pgx/v5"
 )
 
 // historySelect is the shared SELECT prefix for the play history queries. It
@@ -26,7 +26,7 @@ const historySelect = `
 
 // scanHistoryRows scans the shared historySelect result columns into
 // HistoryEntry values.
-func scanHistoryRows(rows *sql.Rows) ([]models.HistoryEntry, error) {
+func scanHistoryRows(rows pgx.Rows) ([]models.HistoryEntry, error) {
 	var entries []models.HistoryEntry
 	for rows.Next() {
 		var e models.HistoryEntry
@@ -53,7 +53,7 @@ func FetchPlayHistoryRecency(ctx context.Context, limit int) ([]models.HistoryEn
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx, historySelect+`
+	rows, err := DB.Query(ctx, historySelect+`
 		ORDER BY last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -71,7 +71,7 @@ func FetchPlayHistoryFrequency(ctx context.Context, limit int) ([]models.History
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx, historySelect+`
+	rows, err := DB.Query(ctx, historySelect+`
 		ORDER BY plays DESC, last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -88,7 +88,7 @@ func FetchPlayHistoryGrouped(ctx context.Context, limit int) ([]models.RadioHist
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx, historySelect+`
+	rows, err := DB.Query(ctx, historySelect+`
 		ORDER BY r.radio ASC, plays DESC, last_played DESC
 		LIMIT $1`, limit)
 	if err != nil {

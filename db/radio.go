@@ -40,7 +40,7 @@ func UpsertRadioStations(ctx context.Context, stations []models.RadioStation) er
 		countrycode = excluded.countrycode,
 		languagecodes = excluded.languagecodes`)
 
-	_, err := DB.ExecContext(ctx, sb.String(), args...)
+	_, err := DB.Exec(ctx, sb.String(), args...)
 	return err
 }
 
@@ -70,7 +70,7 @@ func FetchRadioStations(ctx context.Context, q string) ([]models.RadioStation, e
 			LIMIT 20`
 	}
 
-	rows, err := DB.QueryContext(ctx, query, args...)
+	rows, err := DB.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -114,14 +114,14 @@ func FetchRadioStationURLs(ctx context.Context) (map[string]string, error) {
 }
 
 // FetchRadioStationByUUID returns the station with the given uuid, or
-// sql.ErrNoRows when it does not exist.
+// pgx.ErrNoRows when it does not exist.
 func FetchRadioStationByUUID(ctx context.Context, uuid string) (models.RadioStation, error) {
 	if DB == nil {
 		return models.RadioStation{}, fmt.Errorf("nil db")
 	}
 
 	var s models.RadioStation
-	err := DB.QueryRowContext(ctx,
+	err := DB.QueryRow(ctx,
 		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 		 FROM radio_stations
 		 WHERE stationuuid = $1`,
@@ -139,7 +139,7 @@ func AddFavorite(ctx context.Context, stationuuid string) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
-	_, err := DB.ExecContext(ctx,
+	_, err := DB.Exec(ctx,
 		`INSERT INTO favorites (stationuuid) VALUES ($1)
 		 ON CONFLICT (stationuuid) DO NOTHING`,
 		stationuuid,
@@ -153,7 +153,7 @@ func RemoveFavorite(ctx context.Context, stationuuid string) error {
 	if DB == nil {
 		return fmt.Errorf("nil db")
 	}
-	_, err := DB.ExecContext(ctx, `DELETE FROM favorites WHERE stationuuid = $1`, stationuuid)
+	_, err := DB.Exec(ctx, `DELETE FROM favorites WHERE stationuuid = $1`, stationuuid)
 	return err
 }
 
@@ -163,7 +163,7 @@ func FetchFavoriteUUIDs(ctx context.Context) (map[string]struct{}, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx, `SELECT stationuuid FROM favorites`)
+	rows, err := DB.Query(ctx, `SELECT stationuuid FROM favorites`)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func FetchFavoriteStations(ctx context.Context) ([]models.RadioStation, error) {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
+	rows, err := DB.Query(ctx,
 		`SELECT s.stationuuid, s.name, s.url_resolved, s.favicon, s.tags, s.countrycode, s.languagecodes
 		 FROM favorites f
 		 JOIN radio_stations s ON s.stationuuid = f.stationuuid

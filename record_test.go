@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -28,20 +27,20 @@ import (
 // storeToDisk would flush to disk if the size threshold were met.
 func TestRecordOnceConcurrent30s(t *testing.T) {
 	// --- Database setup (mirrors split_test.go) ---
-	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	if err != nil {
 		t.Skipf("test database unavailable: %v", err)
 	}
-	if _, err := admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`); err != nil {
+	if _, err := admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`); err != nil {
 		t.Skipf("test database unavailable: %v", err)
 	}
-	require.NoError(t, admin.Close())
+	admin.Close()
 
 	db.SetRecordDBPath(testDBPath)
 	db.CreateDBHandle()
 
 	// Start from a clean slate so the test is hermetic and deterministic.
-	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
 	require.NoError(t, err)
 	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
 
