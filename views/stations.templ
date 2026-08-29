@@ -1,0 +1,138 @@
+package views
+
+import (
+	"github.com/hibooboo2/gradio/models"
+)
+
+// stationRow renders one row of the Radio Stations / Favorites tables.
+templ stationRow(s models.StationViewRow, showStar bool) {
+	<tr class="station-row">
+		<td>
+			<span class="station-favicon">
+				if s.Favicon != "" {
+					<img src={ s.Favicon } alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+				} else {
+					&#128276;
+				}
+			</span>
+			<span class="station-name">
+				if s.URLResolved != "" {
+					<button type="button" class="station-name-btn" title={ s.URLResolved } onclick={ templ.JSUnsafeFuncCall("window.open('" + s.URLResolved + "','_blank','noopener,noreferrer')") }>{ s.Name }</button>
+				} else {
+					{ s.Name }
+				}
+			</span>
+			if showStar {
+				<span class="station-star" title="Favorited">&#11088;</span>
+			} else if s.Favorited {
+				<span class="station-star" title="Favorited">&#11088;</span>
+			}
+		</td>
+		<td>
+			if s.CountryCode != "" {
+				{ s.CountryCode }
+			} else {
+				&mdash;
+			}
+		</td>
+		<td>
+			if s.LanguageCodes != "" {
+				{ s.LanguageCodes }
+			} else {
+				&mdash;
+			}
+		</td>
+		<td class="station-tags">
+			if s.Tags != "" {
+				{ s.Tags }
+			} else {
+				&mdash;
+			}
+		</td>
+		<td class="station-actions">
+			<button class="station-fav" data-station-uuid={ s.StationUUID } data-station-name={ s.Name }
+				data-favorited={ BoolAttr(s.Favorited) }
+				onclick={ templ.JSUnsafeFuncCall("return handleToggleFavorite(event, '" + s.StationUUID + "')") }
+				if s.Favorited {
+					title="Unfavorite"
+				} else {
+					title="Favorite"
+				}>
+				if s.Favorited {
+					&#11088;&#65039;
+				} else {
+					&#9734;
+				}
+			</button>
+			<button class="station-record" data-station-uuid={ s.StationUUID } data-station-name={ s.Name }
+				onclick={ templ.JSUnsafeFuncCall("return handleStationRecord(event, '" + s.StationUUID + "')") }
+				if RecordButtonDisabled(s) {
+					disabled
+				}
+				title={ RecordButtonTitle(s) }>
+				{ RecordButtonLabel(s) }
+			</button>
+			<span class="station-status" id={ "status-" + s.StationUUID }></span>
+		</td>
+	</tr>
+}
+
+// StationsView renders the Radio Stations tab fragment: every station from the
+// radio_stations table with a play/record button.
+templ StationsView(data models.StationsViewData) {
+	<div class="view-header">
+		<h2>Radio Stations</h2>
+		<p>{ len(data.Stations) } { Plural(len(data.Stations), "station") } &mdash; click one to start recording and play its songs</p>
+	</div>
+
+	if len(data.Stations) > 0 {
+		<table class="station-table">
+			<thead>
+				<tr>
+					<th>Station</th>
+					<th>Country</th>
+					<th>Language</th>
+					<th>Tags</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, s := range data.Stations {
+					@stationRow(s, false)
+				}
+			</tbody>
+		</table>
+	} else {
+		<p class="empty">No radio stations loaded yet. Run <code>gradio -sync</code> to populate the stations table.</p>
+	}
+}
+
+// FavoritesView renders the Favorites tab fragment: only the stations that
+// have been favorited.
+templ FavoritesView(data models.StationsViewData) {
+	<div class="view-header">
+		<h2>Favorite Radio Stations</h2>
+		<p>{ len(data.Stations) } { Plural(len(data.Stations), "favorited station") } &mdash; click one to start recording and play its songs</p>
+	</div>
+
+	if len(data.Stations) > 0 {
+		<table class="station-table">
+			<thead>
+				<tr>
+					<th>Station</th>
+					<th>Country</th>
+					<th>Language</th>
+					<th>Tags</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, s := range data.Stations {
+					@stationRow(s, true)
+				}
+			</tbody>
+		</table>
+	} else {
+		<p class="empty">No favorite stations yet. Click the &#9734; star next to a station on the Radio Stations tab to favorite it.</p>
+	}
+}

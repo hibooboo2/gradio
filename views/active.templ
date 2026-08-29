@@ -1,0 +1,99 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/hibooboo2/gradio/models"
+)
+
+// ActiveView renders the Active Recordings tab fragment: every station
+// currently being recorded plus the stations queued behind a busy domain.
+templ ActiveView(data models.ActiveRecordingsViewData) {
+	<div class="view-header">
+		<h2>Active Recordings</h2>
+		<p>{ len(data.Active) } { Plural(len(data.Active), "recording") } live
+			if len(data.Queued) > 0 {
+				&mdash; { len(data.Queued) } queued
+			}
+		</p>
+	</div>
+
+	if len(data.Active) > 0 {
+		<table class="station-table active-table">
+			<thead>
+				<tr>
+					<th>Station</th>
+					<th>Domain</th>
+					<th>Started</th>
+					<th>Duration</th>
+					<th>Buffer</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, a := range data.Active {
+					<tr class="station-row">
+						<td>
+							<span class="rec-indicator" title="Recording now"></span>
+							<span class="station-name">
+								if a.URL != "" {
+									<button type="button" class="station-name-btn" title={ a.URL } onclick={ templ.JSUnsafeFuncCall("window.open('" + a.URL + "','_blank','noopener,noreferrer')") }>{ a.Name }</button>
+								} else {
+									{ a.Name }
+								}
+							</span>
+						</td>
+						<td>
+							if a.Domain != "" {
+								{ a.Domain }
+							} else {
+								&mdash;
+							}
+						</td>
+						<td>{ TimeFmt(a.Started) }</td>
+						<td>
+							if a.Duration != "" {
+								{ a.Duration }
+							} else {
+								&mdash;
+							}
+						</td>
+						<td title={ fmt.Sprintf("%d bytes", a.BufferBytes) }>
+							if a.BufferHuman != "" {
+								{ a.BufferHuman }
+							} else {
+								0 B
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	} else {
+		<p class="empty">No active recordings.</p>
+	}
+
+	if len(data.Queued) > 0 {
+		<h3 class="radio-section-title">Queued for a recording slot</h3>
+		<table class="station-table active-table">
+			<thead>
+				<tr>
+					<th>Station</th>
+					<th>Domain</th>
+					<th>Position</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, q := range data.Queued {
+					<tr class="station-row">
+						<td>
+							<span class="rec-indicator queued" title="Waiting for a recording slot"></span>
+							<span class="station-name">{ q.Name }</span>
+						</td>
+						<td>{ q.Domain }</td>
+						<td>{ q.Position }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}

@@ -1,0 +1,59 @@
+package views
+
+import (
+	"github.com/hibooboo2/gradio/models"
+)
+
+// SplitsView renders the htmx fragment listing all splits, grouped by radio
+// with a color-coded badge per radio.
+templ SplitsView(groups []models.RadioGroup) {
+	if len(groups) > 0 {
+		for _, g := range groups {
+			<section class="radio-group">
+				<h2>
+					<span class="radio-badge" style={ "background:" + g.Color }>{ g.Radio }</span>
+					<span class="count">{ len(g.Splits) } { Plural(len(g.Splits), "split") }</span>
+				</h2>
+				<table>
+					<thead>
+						<tr>
+							<th>ID</th>
+							<th>Title</th>
+							<th>Recording</th>
+							<th>#</th>
+							<th>Start</th>
+							<th>End</th>
+							<th>Duration</th>
+							<th>Classification</th>
+							<th>Output</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(g.Splits) > 0 {
+							for _, s := range g.Splits {
+								<tr class={ "cls-" + s.Classification }>
+									<td>{ s.ID }</td>
+									<td>
+										<span class="split-title" data-derived-title={ DerivedSongTitle(s) }>{ SongTitle(s) }</span>
+										<button type="button" class="title-edit" data-title-edit data-split={ s.ID } title="Rename this track">&#9999;&#65039;</button>
+									</td>
+									<td>{ s.SourcePath }</td>
+									<td>{ s.Index }</td>
+									<td>{ FmtFloat(s.Start) }</td>
+									<td>{ FmtFloat(s.End) }</td>
+									<td>{ FmtFloat(s.Duration()) }</td>
+									<td>{ ClsLabel(s.Classification) }</td>
+									<td>{ s.OutputPath }</td>
+								</tr>
+							}
+						} else {
+							<tr><td colspan="9">No splits in this radio.</td></tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
+	} else {
+		<p class="empty">No splits found.</p>
+	}
+}

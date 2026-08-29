@@ -1,0 +1,18 @@
+package views
+
+// StationNoSongs is rendered when a station has no recorded songs yet.
+templ StationNoSongs(name string) {
+	<div class="player-empty surface">
+		<p class="empty-icon">&#127911;</p>
+		<p class="empty">No songs for { name } yet.</p>
+		<p class="empty-sub">Recording is running &mdash; songs will appear here once the stream has been recorded and split. Check back after the first split finishes.</p>
+	</div>
+}
+
+// QueuedStation is rendered when a station was queued behind another station
+// on the same domain, telling the client without starting a recorder.
+templ QueuedStation(name, domain string, position int) {
+	<div class="player-empty surface">
+		<p class="empty">{ name } is queued for the next recording slot for { domain } (position { position }).</p>
+	</div>
+}

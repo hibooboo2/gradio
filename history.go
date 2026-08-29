@@ -1,13 +1,13 @@
 package main
 
 import (
-	"html/template"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
+	"github.com/hibooboo2/gradio/views"
 )
 
 // historyDefaultLimit is how many history entries the view shows by default.
@@ -16,88 +16,6 @@ const historyDefaultLimit = 100
 // historyMaxLimit caps the ?limit= query param so a single request cannot ask
 // for an unbounded history dump.
 const historyMaxLimit = 1000
-
-// historyViewTemplate renders the htmx fragment for the play history tab. It
-// shows the songs that were played, sorted by recency or frequency, optionally
-// grouped by radio. The sort/group controls re-fetch the fragment and push the
-// matching page URL so the state survives reloads and back/forward.
-var historyViewTemplate = template.Must(template.New("history").Funcs(viewFuncs).Parse(`
-<div class="view-header">
-	<h2>Play History</h2>
-	<p>{{.Total}} song{{if ne .Total 1}}s{{end}} played &mdash; sorted by {{if eq .Sort "frequency"}}frequency{{else}}recency{{end}}{{if .Group}}, grouped by radio{{end}}</p>
-</div>
-
-<form class="history-form" onsubmit="historyFormSubmit(event)">
-	<select name="sort" onchange="this.form.requestSubmit()" title="Sort order">
-		<option value="recency"{{if eq .Sort "recency"}} selected{{end}}>Sort by recency</option>
-		<option value="frequency"{{if eq .Sort "frequency"}} selected{{end}}>Sort by frequency</option>
-	</select>
-	<label class="history-group-toggle" title="Group songs by the radio they were recorded from">
-		<input type="checkbox" name="group" value="radio"{{if .Group}} checked{{end}} onchange="this.form.requestSubmit()">
-		Group by radio
-	</label>
-</form>
-
-{{if .Group}}
-	{{range .Groups}}
-	<section class="radio-group">
-		<h2>
-			<span class="radio-badge" style="background:{{.Color}}">{{.Radio}}</span>
-			<span class="count">{{len .Plays}} song{{if ne (len .Plays) 1}}s{{end}}</span>
-		</h2>
-		<table>
-			<thead>
-				<tr>
-					<th>Title</th>
-					<th>Plays</th>
-					<th>Last Played</th>
-					<th>First Played</th>
-				</tr>
-			</thead>
-			<tbody>
-				{{range .Plays}}
-				<tr>
-					<td>{{songTitle .Split}}</td>
-					<td>{{.Plays}}</td>
-					<td>{{timeFmt .LastPlayed}}</td>
-					<td>{{timeFmt .FirstPlayed}}</td>
-				</tr>
-				{{else}}
-				<tr><td colspan="4" class="empty">No plays recorded yet.</td></tr>
-				{{end}}
-			</tbody>
-		</table>
-	</section>
-	{{else}}
-	<p class="empty">No plays recorded yet. Play some music and it will show up here.</p>
-	{{end}}
-{{else}}
-<table class="history-table">
-	<thead>
-		<tr>
-			<th>Title</th>
-			<th>Radio</th>
-			<th>Plays</th>
-			<th>Last Played</th>
-			<th>First Played</th>
-		</tr>
-	</thead>
-	<tbody>
-		{{range .Entries}}
-		<tr>
-			<td>{{songTitle .Split}}</td>
-			<td>{{.Radio}}</td>
-			<td>{{.Plays}}</td>
-			<td>{{timeFmt .LastPlayed}}</td>
-			<td>{{timeFmt .FirstPlayed}}</td>
-		</tr>
-		{{else}}
-		<tr><td colspan="5" class="empty">No plays recorded yet. Play some music and it will show up here.</td></tr>
-		{{end}}
-	</tbody>
-</table>
-{{end}}
-`))
 
 // historyParams parses the sort/group/limit query params shared by the history
 // view fragment and the JSON API. sort defaults to "recency"; group is enabled
@@ -149,14 +67,14 @@ func handleHistoryView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := historyViewTemplate.Execute(w, models.HistoryViewData{
+	if err := views.HistoryView(models.HistoryViewData{
 		Sort:    sort,
 		Group:   group,
 		Limit:   limit,
 		Total:   total,
 		Entries: entries,
 		Groups:  groups,
-	}); err != nil {
+	}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render play history view", "err", err)
 	}
 }

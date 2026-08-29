@@ -1,0 +1,37 @@
+package views
+
+import (
+	"github.com/hibooboo2/gradio/db"
+)
+
+// SettingsView renders the Settings tab fragment: a list of every stored
+// setting with its raw JSON value. The frontend JS enhances the list with
+// inline editing via the data-* attributes.
+templ SettingsView(settings []db.SettingEntry) {
+	<div data-settings-view>
+		<div class="view-header">
+			<h2>Settings</h2>
+			<p>{ len(settings) } { Plural(len(settings), "setting") } &mdash; edit raw JSON values</p>
+		</div>
+
+		if len(settings) > 0 {
+			<ul class="settings-list">
+				for _, s := range settings {
+					<li class="surface settings-item" data-setting-key={ s.Key }>
+						<div class="settings-head">
+							<span class="settings-key">{ s.Key }</span>
+							<span class="settings-meta">updated { TimeFmt(s.UpdatedAt) }</span>
+						</div>
+						<pre class="settings-value" data-setting-value>{ string(s.Value) }</pre>
+						<div class="settings-actions">
+							<button type="button" class="btn-settings-edit" data-setting-edit title="Edit this setting">&#9998; Edit</button>
+							<button type="button" class="btn-danger btn-settings-delete" data-setting-delete title="Delete this setting">&#128465; Delete</button>
+						</div>
+					</li>
+				}
+			</ul>
+		} else {
+			<p class="empty">No settings stored yet. Settings appear here as they are created.</p>
+		}
+	</div>
+}

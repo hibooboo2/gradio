@@ -1,0 +1,101 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/hibooboo2/gradio/models"
+)
+
+// PlaylistsView renders the play lists tab fragment. The playlist with id
+// data.Expanded has its songs loaded and rendered inline.
+templ PlaylistsView(data models.PlaylistsViewData) {
+	<div class="view-header">
+		<h2>Playlists</h2>
+		<p>{ len(data.Playlists) } { Plural(len(data.Playlists), "playlist") } &mdash; built from the mp3 files in your splits</p>
+	</div>
+
+	<form class="create-form" hx-post="/playlists/create" hx-target="#content" hx-swap="innerHTML"
+		hx-push-url="/playlists">
+		<input type="text" name="name" placeholder="New playlist name" required maxlength="200">
+		<button type="submit">Create</button>
+	</form>
+
+	if len(data.Playlists) > 0 {
+		<ul class="playlist-list">
+			for _, pl := range data.Playlists {
+				<li class="surface playlist-item">
+					<div class="playlist-head"
+						hx-get={ fmt.Sprintf("/playlists/view?expand=%d", pl.ID) } hx-target="#content" hx-swap="innerHTML"
+						hx-push-url={ fmt.Sprintf("/playlists?expand=%d", pl.ID) }>
+						<div class="playlist-icon">&#9835;</div>
+						<div class="playlist-info">
+							<span class="playlist-name">{ pl.Name }</span>
+							<span class="playlist-meta">{ pl.TrackCount } { Plural(pl.TrackCount, "track") }</span>
+						</div>
+						<span class="playlist-chevron">
+							if pl.ID == data.Expanded {
+								&#9660;
+							} else {
+								&#9654;
+							}
+						</span>
+					</div>
+
+					if pl.ID == data.Expanded {
+						<div class="playlist-detail">
+							<div class="playlist-actions">
+								<button class="btn-play"
+									hx-get={ fmt.Sprintf("/player/view?playlist=%d", pl.ID) } hx-target="#content" hx-swap="innerHTML"
+									hx-push-url={ fmt.Sprintf("/player?playlist=%d", pl.ID) } hx-on:click="selectTab('player', false)">&#9654; Play</button>
+								<button class="btn-danger"
+									hx-post={ fmt.Sprintf("/playlists/%d/delete", pl.ID) } hx-target="#content" hx-swap="innerHTML"
+									hx-push-url="/playlists"
+									hx-confirm={ fmt.Sprintf("Delete playlist %q? The mp3 files are kept.", pl.Name) }>&#128465; Delete</button>
+							</div>
+
+							<h3>Songs</h3>
+							if len(pl.Songs) > 0 {
+								<ul class="song-list">
+									for _, song := range pl.Songs {
+										<li>
+											<a class="song-play" href={ fmt.Sprintf("/player?playlist=%d&song=%d", pl.ID, song.Split.ID) }
+												title="Play"
+												hx-get={ fmt.Sprintf("/player/view?playlist=%d&song=%d", pl.ID, song.Split.ID) }
+												hx-target="#content" hx-swap="innerHTML" hx-push-url={ fmt.Sprintf("/player?playlist=%d&song=%d", pl.ID, song.Split.ID) }
+												hx-on:click="selectTab('player', false)">&#9654;</a>
+											<div class="song-info">
+												<span class="song-title">{ SongTitle(song.Split) }</span>
+												<span class="song-sub">{ TimeStr(song.Split.Start) } &ndash; { TimeStr(song.Split.End) } &middot; { ClsLabel(song.Split.Classification) }</span>
+											</div>
+											<button class="btn-remove" title="Remove from playlist"
+												hx-post={ fmt.Sprintf("/playlists/%d/songs/%d/delete", pl.ID, song.Split.ID) }
+												hx-target="#content" hx-swap="innerHTML"
+												hx-push-url={ fmt.Sprintf("/playlists?expand=%d", pl.ID) }
+												hx-vals={ ExpandVals(pl.ID) }>&times;</button>
+										</li>
+									}
+								</ul>
+							} else {
+								<p class="empty">No songs yet. Add some below.</p>
+							}
+
+							<form class="add-song-form" hx-post={ fmt.Sprintf("/playlists/%d/songs", pl.ID) } hx-target="#content" hx-swap="innerHTML"
+								hx-push-url={ fmt.Sprintf("/playlists?expand=%d", pl.ID) }
+								hx-vals={ ExpandVals(pl.ID) }>
+								<select name="split_id" required>
+									<option value="" disabled selected>Add an mp3 from the splits&hellip;</option>
+									for _, s := range data.AllSongs {
+										<option value={ s.ID }>{ SongTitle(s) }</option>
+									}
+								</select>
+								<button type="submit">Add</button>
+							</form>
+						</div>
+					}
+				</li>
+			}
+		</ul>
+	} else {
+		<p class="empty">No playlists yet. Create one above using the mp3 files in your splits.</p>
+	}
+}

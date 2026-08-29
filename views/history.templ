@@ -1,0 +1,104 @@
+package views
+
+import (
+	"github.com/hibooboo2/gradio/models"
+)
+
+// HistoryView renders the htmx fragment for the play history tab. It shows the
+// songs that were played, sorted by recency or frequency, optionally grouped by
+// radio.
+templ HistoryView(data models.HistoryViewData) {
+	<div class="view-header">
+		<h2>Play History</h2>
+		<p>{ HistorySummary(data.Total, data.Sort, data.Group) }</p>
+	</div>
+
+	<form class="history-form" onsubmit="historyFormSubmit(event)">
+		<select name="sort" onchange="this.form.requestSubmit()" title="Sort order">
+			<option value="recency"
+				if data.Sort == "recency" {
+					selected
+				}
+			>Sort by recency</option>
+			<option value="frequency"
+				if data.Sort == "frequency" {
+					selected
+				}
+			>Sort by frequency</option>
+		</select>
+		<label class="history-group-toggle" title="Group songs by the radio they were recorded from">
+			<input type="checkbox" name="group" value="radio"
+				if data.Group {
+					checked
+				}
+				onchange="this.form.requestSubmit()">
+			Group by radio
+		</label>
+	</form>
+
+	if data.Group {
+		if len(data.Groups) > 0 {
+			for _, g := range data.Groups {
+				<section class="radio-group">
+					<h2>
+						<span class="radio-badge" style={ "background:" + g.Color }>{ g.Radio }</span>
+						<span class="count">{ len(g.Plays) } { Plural(len(g.Plays), "song") }</span>
+					</h2>
+					<table>
+						<thead>
+							<tr>
+								<th>Title</th>
+								<th>Plays</th>
+								<th>Last Played</th>
+								<th>First Played</th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(g.Plays) > 0 {
+								for _, e := range g.Plays {
+									<tr>
+										<td>{ SongTitle(e.Split) }</td>
+										<td>{ e.Plays }</td>
+										<td>{ TimeFmt(e.LastPlayed) }</td>
+										<td>{ TimeFmt(e.FirstPlayed) }</td>
+									</tr>
+								}
+							} else {
+								<tr><td colspan="4" class="empty">No plays recorded yet.</td></tr>
+							}
+						</tbody>
+					</table>
+				</section>
+			}
+		} else {
+			<p class="empty">No plays recorded yet. Play some music and it will show up here.</p>
+		}
+	} else {
+		<table class="history-table">
+			<thead>
+				<tr>
+					<th>Title</th>
+					<th>Radio</th>
+					<th>Plays</th>
+					<th>Last Played</th>
+					<th>First Played</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(data.Entries) > 0 {
+					for _, e := range data.Entries {
+						<tr>
+							<td>{ SongTitle(e.Split) }</td>
+							<td>{ e.Radio }</td>
+							<td>{ e.Plays }</td>
+							<td>{ TimeFmt(e.LastPlayed) }</td>
+							<td>{ TimeFmt(e.FirstPlayed) }</td>
+						</tr>
+					}
+				} else {
+					<tr><td colspan="5" class="empty">No plays recorded yet. Play some music and it will show up here.</td></tr>
+				}
+			</tbody>
+		</table>
+	}
+}

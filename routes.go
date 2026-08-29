@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
+	"github.com/hibooboo2/gradio/views"
 )
 
 // serveAPI runs the management HTTP server until ctx is cancelled.
@@ -421,56 +421,6 @@ func handleMergeSplit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// splitsViewTemplate renders the htmx fragment listing all splits, grouped by
-// radio with a color-coded badge per radio.
-var splitsViewTemplate = template.Must(template.New("splits").Funcs(viewFuncs).Parse(`
-{{range .}}
-<section class="radio-group">
-	<h2>
-		<span class="radio-badge" style="background:{{.Color}}">{{.Radio}}</span>
-		<span class="count">{{len .Splits}} split{{if ne (len .Splits) 1}}s{{end}}</span>
-	</h2>
-	<table>
-		<thead>
-			<tr>
-				<th>ID</th>
-				<th>Title</th>
-				<th>Recording</th>
-				<th>#</th>
-				<th>Start</th>
-				<th>End</th>
-				<th>Duration</th>
-				<th>Classification</th>
-				<th>Output</th>
-			</tr>
-		</thead>
-		<tbody>
-			{{range .Splits}}
-			<tr class="cls-{{.Classification}}">
-				<td>{{.ID}}</td>
-				<td>
-					<span class="split-title" data-derived-title="{{derivedSongTitle .}}">{{songTitle .}}</span>
-					<button type="button" class="title-edit" data-title-edit data-split="{{.ID}}" title="Rename this track">&#9999;&#65039;</button>
-				</td>
-				<td>{{.SourcePath}}</td>
-				<td>{{.Index}}</td>
-				<td>{{printf "%.1f" .Start}}</td>
-				<td>{{printf "%.1f" .End}}</td>
-				<td>{{printf "%.1f" .Duration}}</td>
-				<td>{{clsLabel .Classification}}</td>
-				<td>{{.OutputPath}}</td>
-			</tr>
-			{{else}}
-			<tr><td colspan="9">No splits in this radio.</td></tr>
-			{{end}}
-		</tbody>
-	</table>
-</section>
-{{else}}
-<p class="empty">No splits found.</p>
-{{end}}
-`))
-
 // radioPalette assigns a stable color to each distinct radio.
 var radioPalette = models.RadioPalette
 
@@ -510,7 +460,7 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := splitsViewTemplate.Execute(w, groups); err != nil {
+	if err := views.SplitsView(groups).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render splits view", "err", err)
 	}
 }

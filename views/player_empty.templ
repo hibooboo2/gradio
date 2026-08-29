@@ -1,0 +1,40 @@
+package views
+
+import (
+	"github.com/hibooboo2/gradio/models"
+)
+
+// PlayerEmpty renders the player tab's empty state, which lists available
+// radios to start.
+templ PlayerEmpty(data models.PlayerEmptyData) {
+	<div class="player-empty surface">
+		<p class="empty-icon">&#9835;</p>
+		<p class="empty">Nothing is playing.</p>
+		<p class="empty-sub">Pick a playlist from the Play Lists tab, start a radio below, or shuffle your whole library.</p>
+
+		<button class="btn-play shuffle-all"
+			hx-get="/player/view?shuffle=1" hx-target="#content" hx-swap="innerHTML"
+			hx-push-url="/player?shuffle=1" hx-on:click="selectTab('player')"
+			title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
+
+		if len(data.Radios) > 0 {
+			<h3 class="radio-section-title">Radios</h3>
+			<ul class="radio-list">
+				for _, radio := range data.Radios {
+					<li class="radio-item">
+						<button
+							class="radio-play"
+							hx-get={ "/player/view?radio=" + URLQ(radio.Name) } hx-target="#content" hx-swap="innerHTML"
+							hx-push-url={ "/player?radio=" + URLQ(radio.Name) } hx-on:click="selectTab('player')"
+							title={ "Play radio " + radio.Name }>&#9654; Play { radio.Name }</button>
+						<span class="radio-meta">{ radio.SplitCount } { Plural(radio.SplitCount, "split") }</span>
+					</li>
+				}
+			</ul>
+		}
+
+		<button class="go-playlists"
+			hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML"
+			hx-push-url="/playlists" hx-on:click="selectTab('playlists')">Go to Play Lists</button>
+	</div>
+}

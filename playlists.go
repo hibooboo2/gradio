@@ -4,18 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
+	"github.com/hibooboo2/gradio/views"
 )
 
 // derivedSongTitle produces the default human-friendly label for a split's
@@ -50,255 +48,6 @@ const radioQueueSize = 100
 // shuffle. When a batch finishes playing, the client fetches the next batch of
 // songs that have not been played yet in that session.
 const shuffleBatchSize = 5
-
-var viewFuncs = template.FuncMap{
-	"musicURL":              musicURL,
-	"songTitle":             songTitle,
-	"derivedSongTitle":      derivedSongTitle,
-	"clsLabel":              models.ClsLabel,
-	"classificationOptions": func() []models.ClassificationOption { return models.ClassificationOptions },
-	"urlq":                  url.QueryEscape,
-	"timeStr": func(seconds float64) string {
-		if seconds < 0 {
-			return "0:00"
-		}
-		total := int(seconds)
-		m := total / 60
-		s := total % 60
-		return fmt.Sprintf("%d:%02d", m, s)
-	},
-	"timeFmt": func(t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.Local().Format("2006-01-02 15:04:05")
-	},
-}
-
-var playlistsViewTemplate = template.Must(template.New("playlists").Funcs(viewFuncs).Parse(`
-<div class="view-header">
-	<h2>Playlists</h2>
-	<p>{{len .Playlists}} playlist{{if ne (len .Playlists) 1}}s{{end}} &mdash; built from the mp3 files in your splits</p>
-</div>
-
-<form class="create-form" hx-post="/playlists/create" hx-target="#content" hx-swap="innerHTML"
-		hx-push-url="/playlists">
-	<input type="text" name="name" placeholder="New playlist name" required maxlength="200">
-	<button type="submit">Create</button>
-</form>
-
-{{if .Playlists}}
-<ul class="playlist-list">
-	{{range .Playlists}}
-	{{$pl := .}}
-	<li class="surface playlist-item">
-		<div class="playlist-head"
-			hx-get="/playlists/view?expand={{.ID}}" hx-target="#content" hx-swap="innerHTML"
-			hx-push-url="/playlists?expand={{.ID}}">
-			<div class="playlist-icon">&#9835;</div>
-			<div class="playlist-info">
-				<span class="playlist-name">{{.Name}}</span>
-				<span class="playlist-meta">{{.TrackCount}} track{{if ne .TrackCount 1}}s{{end}}</span>
-			</div>
-			<span class="playlist-chevron">{{if eq .ID $.Expanded}}&#9660;{{else}}&#9654;{{end}}</span>
-		</div>
-
-		{{if eq .ID $.Expanded}}
-		<div class="playlist-detail">
-			<div class="playlist-actions">
-				<button class="btn-play"
-					hx-get="/player/view?playlist={{.ID}}" hx-target="#content" hx-swap="innerHTML"
-					hx-push-url="/player?playlist={{.ID}}" hx-on:click="selectTab('player', false)">&#9654; Play</button>
-				<button class="btn-danger"
-					hx-post="/playlists/{{.ID}}/delete" hx-target="#content" hx-swap="innerHTML"
-					hx-push-url="/playlists"
-					hx-confirm="Delete playlist &quot;{{.Name}}&quot;? The mp3 files are kept.">&#128465; Delete</button>
-			</div>
-
-			<h3>Songs</h3>
-			{{if .Songs}}
-			<ul class="song-list">
-				{{range .Songs}}
-				<li>
-					<a class="song-play" href="/player?playlist={{$pl.ID}}&song={{.Split.ID}}"
-						title="Play"
-						hx-get="/player/view?playlist={{$pl.ID}}&song={{.Split.ID}}"
-						hx-target="#content" hx-swap="innerHTML" hx-push-url="/player?playlist={{$pl.ID}}&song={{.Split.ID}}"
-						hx-on:click="selectTab('player', false)">&#9654;</a>
-					<div class="song-info">
-						<span class="song-title">{{songTitle .Split}}</span>
-						<span class="song-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; {{clsLabel .Split.Classification}}</span>
-					</div>
-					<button class="btn-remove" title="Remove from playlist"
-						hx-post="/playlists/{{$pl.ID}}/songs/{{.Split.ID}}/delete"
-						hx-target="#content" hx-swap="innerHTML"
-						hx-push-url="/playlists?expand={{$pl.ID}}"
-						hx-vals='{"expand": "{{$pl.ID}}"}'>&times;</button>
-				</li>
-				{{end}}
-			</ul>
-			{{else}}
-			<p class="empty">No songs yet. Add some below.</p>
-			{{end}}
-
-			<form class="add-song-form" hx-post="/playlists/{{.ID}}/songs" hx-target="#content" hx-swap="innerHTML"
-				hx-push-url="/playlists?expand={{.ID}}"
-				hx-vals='{"expand": "{{.ID}}"}'>
-				<select name="split_id" required>
-					<option value="" disabled selected>Add an mp3 from the splits&hellip;</option>
-					{{range $.AllSongs}}
-					<option value="{{.ID}}">{{songTitle .}}</option>
-					{{end}}
-				</select>
-				<button type="submit">Add</button>
-			</form>
-		</div>
-		{{end}}
-	</li>
-	{{end}}
-</ul>
-{{else}}
-<p class="empty">No playlists yet. Create one above using the mp3 files in your splits.</p>
-{{end}}
-`))
-
-var playerViewTemplate = template.Must(template.New("player").Funcs(viewFuncs).Parse(`
-<div class="player-wrap" data-player-wrap
-	data-queue-key="{{.QueueKey}}"
-	data-start-split="{{.StartSong}}">
-	<section class="surface player-card">
-		<div class="player-cover" data-eq>
-			<span></span><span></span><span></span>
-		</div>
-		<p class="player-title" data-player-title>Nothing playing</p>
-		<p class="player-subtitle" data-player-subtitle>{{if .Subtitle}}{{.Subtitle}}{{else}}Playlist &middot; {{.Playlist.Name}}{{end}}</p>
-
-		<audio data-audio preload="metadata"></audio>
-
-		<div class="progress-row">
-			<span data-time>0:00</span>
-			<div class="progress-bar" data-progress-bar>
-				<div class="progress-fill" data-progress-fill></div>
-			</div>
-			<span data-duration>0:00</span>
-		</div>
-
-		<div class="transport">
-			<button type="button" class="icon-btn" data-player-shuffle title="Shuffle">&#128256;</button>
-			<button type="button" class="icon-btn" data-player-prev title="Previous">&#9198;&#65039;</button>
-			<button type="button" class="play-btn" data-player-toggle title="Play/Pause">&#9654;&#65039;</button>
-			<button type="button" class="icon-btn" data-player-next title="Next">&#9197;&#65039;</button>
-			<button type="button" class="icon-btn" data-player-repeat title="Repeat">&#128257;&#65039;</button>
-		</div>
-
-		<div class="volume-row">
-			<button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>
-			<input type="range" data-player-volume min="0" max="1" step="0.01">
-		</div>
-
-		<div class="rating-row">
-			<button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>
-			<button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>
-		</div>
-
-		<div class="sleep-row">
-			<button type="button" class="icon-btn sleep-btn" data-player-sleep title="Sleep timer">&#127769;&#65039;</button>
-			<span class="sleep-remaining" data-sleep-remaining></span>
-			<div class="sleep-popup" data-sleep-popup hidden>
-				<div class="sleep-popup-title">Sleep timer</div>
-				<button type="button" data-sleep-min="5">5 min</button>
-				<button type="button" data-sleep-min="10">10 min</button>
-				<button type="button" data-sleep-min="15">15 min</button>
-				<button type="button" data-sleep-min="30">30 min</button>
-				<button type="button" data-sleep-min="60">60 min</button>
-				<button type="button" class="sleep-off" data-sleep-off>Off</button>
-			</div>
-		</div>
-
-		<div class="mark-row">
-			<select data-classification-select disabled title="Classify the currently playing track">
-				{{range classificationOptions}}
-				<option value="{{.Value}}"{{if eq .Value "re_split"}} disabled{{end}}>{{.Label}}</option>
-				{{end}}
-			</select>
-			<button type="button" data-player-merge-prev disabled title="This track started too soon: join the previous split on to it">&#9198;&#65039; Start Too Soon</button>
-			<button type="button" data-player-merge-next disabled title="This track ended too soon: join the following split on to it">&#9197;&#65039; End Too Soon</button>
-		</div>
-
-		<p class="resplit-status" data-resplit-status hidden></p>
-
-		<div class="shuffle-all-row">
-			<button type="button" class="btn-play" data-player-shuffle-all
-				title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
-		</div>
-	</section>
-
-	<aside class="surface queue">
-		<div class="queue-header">
-			<h2>Queue</h2>
-			<span>{{len .Songs}} track{{if ne (len .Songs) 1}}s{{end}}</span>
-		</div>
-		{{if .Songs}}
-		<ul data-player-queue>
-			{{range .Songs}}
-			<li class="queue-item {{if eq .Split.ID $.StartSong}}active{{end}}"
-				data-player-track
-				data-src="{{musicURL .Split.OutputPath}}"
-				data-title="{{songTitle .Split}}"
-				data-split="{{.Split.ID}}"
-				data-start="{{.Split.Start}}"
-				data-end="{{.Split.End}}"
-				data-classification="{{.Split.Classification}}"
-				data-derived-title="{{derivedSongTitle .Split}}"
-				data-custom-title="{{.Split.CustomTitle}}">
-				<span class="queue-num">{{.Position | printf "%d"}}</span>
-				<div class="queue-info">
-					<span class="queue-title">{{songTitle .Split}}</span>
-					<span class="queue-sub">{{timeStr .Split.Start}} &ndash; {{timeStr .Split.End}} &middot; <span data-cls>{{clsLabel .Split.Classification}}</span>{{if .Plays}} &middot; &#9835; {{.Plays}} play{{if ne .Plays 1}}s{{end}}{{end}}</span>
-				</div>
-				<button type="button" class="title-edit" data-title-edit data-split="{{.Split.ID}}" title="Rename this track">&#9999;&#65039;</button>
-			</li>
-			{{end}}
-		</ul>
-		{{else}}
-		<p class="empty">This playlist has no songs.</p>
-		{{end}}
-	</aside>
-</div>
-`))
-
-var playerEmptyTemplate = template.Must(template.New("playerEmpty").Funcs(viewFuncs).Parse(`
-<div class="player-empty surface">
-	<p class="empty-icon">&#9835;</p>
-	<p class="empty">Nothing is playing.</p>
-	<p class="empty-sub">Pick a playlist from the Play Lists tab, start a radio below, or shuffle your whole library.</p>
-
-	<button class="btn-play shuffle-all"
-		hx-get="/player/view?shuffle=1" hx-target="#content" hx-swap="innerHTML"
-		hx-push-url="/player?shuffle=1" hx-on:click="selectTab('player')"
-		title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
-
-	{{if .Radios}}
-	<h3 class="radio-section-title">Radios</h3>
-	<ul class="radio-list">
-		{{range .Radios}}
-		<li class="radio-item">
-			<button
-				class="radio-play"
-				hx-get="/player/view?radio={{urlq .Name}}" hx-target="#content" hx-swap="innerHTML"
-				hx-push-url="/player?radio={{urlq .Name}}" hx-on:click="selectTab('player')"
-				title="Play radio {{.Name}}">&#9654; Play {{.Name}}</button>
-			<span class="radio-meta">{{.SplitCount}} split{{if ne .SplitCount 1}}s{{end}}</span>
-		</li>
-		{{end}}
-	</ul>
-	{{end}}
-
-	<button class="go-playlists"
-		hx-get="/playlists/view" hx-target="#content" hx-swap="innerHTML"
-		hx-push-url="/playlists" hx-on:click="selectTab('playlists')">Go to Play Lists</button>
-</div>
-`))
 
 // parseSplitIDs parses a comma-separated list of split ids, ignoring any
 // non-numeric entries.
@@ -352,11 +101,11 @@ func renderPlaylistsView(w http.ResponseWriter, r *http.Request, expand int64) {
 
 	_ = expandedSongs
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := playlistsViewTemplate.Execute(w, models.PlaylistsViewData{
+	if err := views.PlaylistsView(models.PlaylistsViewData{
 		Playlists: items,
 		AllSongs:  allSongs,
 		Expanded:  expand,
-	}); err != nil {
+	}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render playlists view", "err", err)
 	}
 }
@@ -491,12 +240,12 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+		if err := views.PlayerView(models.PlayerViewData{
 			Playlist: models.Playlist{Name: "All Music"},
 			Songs:    songs,
 			Subtitle: "Global Shuffle",
 			QueueKey: "shuffle",
-		}); err != nil {
+		}).Render(r.Context(), w); err != nil {
 			slog.ErrorContext(r.Context(), "render player view", "err", err)
 		}
 		return
@@ -520,12 +269,12 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+		if err := views.PlayerView(models.PlayerViewData{
 			Playlist: models.Playlist{Name: radio},
 			Songs:    songs,
 			Subtitle: "Radio · " + radio,
 			QueueKey: "radio:" + radio,
-		}); err != nil {
+		}).Render(r.Context(), w); err != nil {
 			slog.ErrorContext(r.Context(), "render player view", "err", err)
 		}
 		return
@@ -538,7 +287,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 			slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := playerEmptyTemplate.Execute(w, models.PlayerEmptyData{Radios: radios}); err != nil {
+		if err := views.PlayerEmpty(models.PlayerEmptyData{Radios: radios}).Render(r.Context(), w); err != nil {
 			slog.ErrorContext(r.Context(), "render player empty", "err", err)
 		}
 		return
@@ -552,7 +301,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 				slog.ErrorContext(r.Context(), "list radios", "err", rerr)
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := playerEmptyTemplate.Execute(w, models.PlayerEmptyData{Radios: radios}); err != nil {
+			if err := views.PlayerEmpty(models.PlayerEmptyData{Radios: radios}).Render(r.Context(), w); err != nil {
 				slog.ErrorContext(r.Context(), "render player empty", "err", err)
 			}
 			return
@@ -577,12 +326,12 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+	if err := views.PlayerView(models.PlayerViewData{
 		Playlist:  playlist,
 		Songs:     songs,
 		StartSong: startSplit,
 		QueueKey:  "playlist:" + strconv.FormatInt(playlistID, 10),
-	}); err != nil {
+	}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render player view", "err", err)
 	}
 }

@@ -1,0 +1,128 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/hibooboo2/gradio/models"
+)
+
+// PlayerView renders the player tab fragment for a loaded queue (playlist,
+// radio, or global shuffle).
+templ PlayerView(data models.PlayerViewData) {
+	<div class="player-wrap" data-player-wrap
+		data-queue-key={ data.QueueKey }
+		data-start-split={ data.StartSong }>
+		<section class="surface player-card">
+			<div class="player-cover" data-eq>
+				<span></span><span></span><span></span>
+			</div>
+			<p class="player-title" data-player-title>Nothing playing</p>
+			<p class="player-subtitle" data-player-subtitle>
+				if data.Subtitle != "" {
+					{ data.Subtitle }
+				} else {
+					Playlist &middot; { data.Playlist.Name }
+				}
+			</p>
+
+			<audio data-audio preload="metadata"></audio>
+
+			<div class="progress-row">
+				<span data-time>0:00</span>
+				<div class="progress-bar" data-progress-bar>
+					<div class="progress-fill" data-progress-fill></div>
+				</div>
+				<span data-duration>0:00</span>
+			</div>
+
+			<div class="transport">
+				<button type="button" class="icon-btn" data-player-shuffle title="Shuffle">&#128256;</button>
+				<button type="button" class="icon-btn" data-player-prev title="Previous">&#9198;&#65039;</button>
+				<button type="button" class="play-btn" data-player-toggle title="Play/Pause">&#9654;&#65039;</button>
+				<button type="button" class="icon-btn" data-player-next title="Next">&#9197;&#65039;</button>
+				<button type="button" class="icon-btn" data-player-repeat title="Repeat">&#128257;&#65039;</button>
+			</div>
+
+			<div class="volume-row">
+				<button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>
+				<input type="range" data-player-volume min="0" max="1" step="0.01">
+			</div>
+
+			<div class="rating-row">
+				<button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>
+				<button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>
+			</div>
+
+			<div class="sleep-row">
+				<button type="button" class="icon-btn sleep-btn" data-player-sleep title="Sleep timer">&#127769;&#65039;</button>
+				<span class="sleep-remaining" data-sleep-remaining></span>
+				<div class="sleep-popup" data-sleep-popup hidden>
+					<div class="sleep-popup-title">Sleep timer</div>
+					<button type="button" data-sleep-min="5">5 min</button>
+					<button type="button" data-sleep-min="10">10 min</button>
+					<button type="button" data-sleep-min="15">15 min</button>
+					<button type="button" data-sleep-min="30">30 min</button>
+					<button type="button" data-sleep-min="60">60 min</button>
+					<button type="button" class="sleep-off" data-sleep-off>Off</button>
+				</div>
+			</div>
+
+			<div class="mark-row">
+				<select data-classification-select disabled title="Classify the currently playing track">
+					for _, opt := range ClassificationOptions() {
+						<option value={ opt.Value }
+							if opt.Value == "re_split" {
+								disabled
+							}
+						>{ opt.Label }</option>
+					}
+				</select>
+				<button type="button" data-player-merge-prev disabled title="This track started too soon: join the previous split on to it">&#9198;&#65039; Start Too Soon</button>
+				<button type="button" data-player-merge-next disabled title="This track ended too soon: join the following split on to it">&#9197;&#65039; End Too Soon</button>
+			</div>
+
+			<p class="resplit-status" data-resplit-status hidden></p>
+
+			<div class="shuffle-all-row">
+				<button type="button" class="btn-play" data-player-shuffle-all
+					title="Shuffle every song in your library, least played first">&#128257; Shuffle All Music</button>
+			</div>
+		</section>
+
+		<aside class="surface queue">
+			<div class="queue-header">
+				<h2>Queue</h2>
+				<span>{ len(data.Songs) } { Plural(len(data.Songs), "track") }</span>
+			</div>
+			if len(data.Songs) > 0 {
+				<ul data-player-queue>
+					for _, song := range data.Songs {
+						<li class={ ActiveClass(song.Split.ID == data.StartSong) }
+							data-player-track
+							data-src={ MusicURL(song.Split.OutputPath) }
+							data-title={ SongTitle(song.Split) }
+							data-split={ song.Split.ID }
+							data-start={ song.Split.Start }
+							data-end={ song.Split.End }
+							data-classification={ song.Split.Classification }
+							data-derived-title={ DerivedSongTitle(song.Split) }
+							data-custom-title={ song.Split.CustomTitle }>
+							<span class="queue-num">{ strconv.Itoa(song.Position) }</span>
+							<div class="queue-info">
+								<span class="queue-title">{ SongTitle(song.Split) }</span>
+								<span class="queue-sub">{ TimeStr(song.Split.Start) } &ndash; { TimeStr(song.Split.End) } &middot; <span data-cls>{ ClsLabel(song.Split.Classification) }</span>
+									if song.Plays > 0 {
+										&middot; &#9835; { song.Plays } { Plural(song.Plays, "play") }
+									}
+								</span>
+							</div>
+							<button type="button" class="title-edit" data-title-edit data-split={ song.Split.ID } title="Rename this track">&#9999;&#65039;</button>
+						</li>
+					}
+				</ul>
+			} else {
+				<p class="empty">This playlist has no songs.</p>
+			}
+		</aside>
+	</div>
+}

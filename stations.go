@@ -2,123 +2,14 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
+	"github.com/hibooboo2/gradio/views"
 )
-
-// stationsViewTemplate renders the Radio Stations tab fragment: every station
-// from the radio_stations table with a play/record button.
-var stationsViewTemplate = template.Must(template.New("stations").Funcs(viewFuncs).Parse(`
-<div class="view-header">
-	<h2>Radio Stations</h2>
-	<p>{{len .Stations}} station{{if ne (len .Stations) 1}}s{{end}} &mdash; click one to start recording and play its songs</p>
-</div>
-
-{{if .Stations}}
-<table class="station-table">
-	<thead>
-		<tr>
-			<th>Station</th>
-			<th>Country</th>
-			<th>Language</th>
-			<th>Tags</th>
-			<th></th>
-		</tr>
-	</thead>
-	<tbody>
-		{{range .Stations}}
-		<tr class="station-row">
-			<td>
-				<span class="station-favicon">
-					{{if .Favicon}}<img src="{{.Favicon}}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">{{else}}&#128276;{{end}}
-				</span>
-				<span class="station-name">{{if .URLResolved}}<button type="button" class="station-name-btn" title="{{.URLResolved}}" onclick="window.open('{{.URLResolved}}','_blank','noopener,noreferrer')">{{.Name}}</button>{{else}}{{.Name}}{{end}}</span>
-				{{if .Favorited}}<span class="station-star" title="Favorited">&#11088;</span>{{end}}
-			</td>
-			<td>{{if .CountryCode}}{{.CountryCode}}{{else}}&mdash;{{end}}</td>
-			<td>{{if .LanguageCodes}}{{.LanguageCodes}}{{else}}&mdash;{{end}}</td>
-			<td class="station-tags">{{if .Tags}}{{.Tags}}{{else}}&mdash;{{end}}</td>
-			<td class="station-actions">
-				<button class="station-fav" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					data-favorited="{{if .Favorited}}true{{else}}false{{end}}"
-					onclick="return handleToggleFavorite(event, '{{.StationUUID}}')"
-					{{if .Favorited}}title="Unfavorite"{{else}}title="Favorite"{{end}}>
-					{{if .Favorited}}&#11088;&#65039;{{else}}&#9734;{{end}}
-				</button>
-				<button class="station-record" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					onclick="return handleStationRecord(event, '{{.StationUUID}}')"
-					{{if .Recording}}disabled title="Already recording"{{else if .Queued}}disabled title="Queued for the next recording slot for {{.Domain}}"{{else}}title="Record this station and play its songs"{{end}}>
-					{{if .Recording}}&#9889; Recording{{else if .Queued}}&#9203; Queued (position {{.QueuePos}} for {{.Domain}}){{else}}&#128311; Record &amp; Play{{end}}
-				</button>
-				<span class="station-status" id="status-{{.StationUUID}}"></span>
-			</td>
-		</tr>
-		{{end}}
-	</tbody>
-</table>
-{{else}}
-<p class="empty">No radio stations loaded yet. Run <code>gradio -sync</code> to populate the stations table.</p>
-{{end}}
-`))
-
-// favoritesViewTemplate renders the Favorites tab fragment: only the stations
-// that have been favorited.
-var favoritesViewTemplate = template.Must(template.New("favorites").Funcs(viewFuncs).Parse(`
-<div class="view-header">
-	<h2>Favorite Radio Stations</h2>
-	<p>{{len .Stations}} favorited station{{if ne (len .Stations) 1}}s{{end}} &mdash; click one to start recording and play its songs</p>
-</div>
-
-{{if .Stations}}
-<table class="station-table">
-	<thead>
-		<tr>
-			<th>Station</th>
-			<th>Country</th>
-			<th>Language</th>
-			<th>Tags</th>
-			<th></th>
-		</tr>
-	</thead>
-	<tbody>
-		{{range .Stations}}
-		<tr class="station-row">
-			<td>
-				<span class="station-favicon">
-					{{if .Favicon}}<img src="{{.Favicon}}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">{{else}}&#128276;{{end}}
-				</span>
-				<span class="station-name">{{if .URLResolved}}<button type="button" class="station-name-btn" title="{{.URLResolved}}" onclick="window.open('{{.URLResolved}}','_blank','noopener,noreferrer')">{{.Name}}</button>{{else}}{{.Name}}{{end}}</span>
-				<span class="station-star" title="Favorited">&#11088;</span>
-			</td>
-			<td>{{if .CountryCode}}{{.CountryCode}}{{else}}&mdash;{{end}}</td>
-			<td>{{if .LanguageCodes}}{{.LanguageCodes}}{{else}}&mdash;{{end}}</td>
-			<td class="station-tags">{{if .Tags}}{{.Tags}}{{else}}&mdash;{{end}}</td>
-			<td class="station-actions">
-				<button class="station-fav" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					data-favorited="true"
-					onclick="return handleToggleFavorite(event, '{{.StationUUID}}')"
-					title="Unfavorite">&#11088;&#65039;</button>
-				<button class="station-record" data-station-uuid="{{.StationUUID}}" data-station-name="{{.Name}}"
-					onclick="return handleStationRecord(event, '{{.StationUUID}}')"
-					{{if .Recording}}disabled title="Already recording"{{else if .Queued}}disabled title="Queued for the next recording slot for {{.Domain}}"{{else}}title="Record this station and play its songs"{{end}}>
-					{{if .Recording}}&#9889; Recording{{else if .Queued}}&#9203; Queued (position {{.QueuePos}} for {{.Domain}}){{else}}&#128311; Record &amp; Play{{end}}
-				</button>
-				<span class="station-status" id="status-{{.StationUUID}}"></span>
-			</td>
-		</tr>
-		{{end}}
-	</tbody>
-</table>
-{{else}}
-<p class="empty">No favorite stations yet. Click the &#9734; star next to a station on the Radio Stations tab to favorite it.</p>
-{{end}}
-`))
 
 // handleStationsView renders the Radio Stations tab fragment listing every
 // station in the radio_stations table with its current recording state.
@@ -152,7 +43,7 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := stationsViewTemplate.Execute(w, models.StationsViewData{Stations: rows}); err != nil {
+	if err := views.StationsView(models.StationsViewData{Stations: rows}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render stations view", "err", err)
 	}
 }
@@ -181,7 +72,7 @@ func handleFavoritesView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := favoritesViewTemplate.Execute(w, models.StationsViewData{Stations: rows}); err != nil {
+	if err := views.FavoritesView(models.StationsViewData{Stations: rows}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render favorites view", "err", err)
 	}
 }
@@ -234,15 +125,6 @@ func handleToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	}
 	handleStationsView(w, r)
 }
-
-// stationNoSongsTemplate is rendered when a station has no recorded songs yet.
-var stationNoSongsTemplate = template.Must(template.New("stationNoSongs").Funcs(viewFuncs).Parse(`
-<div class="player-empty surface">
-	<p class="empty-icon">&#127911;</p>
-	<p class="empty">No songs for {{.Name}} yet.</p>
-	<p class="empty-sub">Recording is running &mdash; songs will appear here once the stream has been recorded and split. Check back after the first split finishes.</p>
-</div>
-`))
 
 // wantsJSON reports whether the request asks for a JSON response, either via
 // the ?json=1 query parameter or an Accept: application/json header.
@@ -297,8 +179,9 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<div class="player-empty surface"><p class="empty">%s is queued for the next recording slot for %s (position %d).</p></div>`,
-			template.HTMLEscapeString(station.Name), template.HTMLEscapeString(res.Domain), res.QueuePosition)
+		if err := views.QueuedStation(station.Name, res.Domain, res.QueuePosition).Render(r.Context(), w); err != nil {
+			slog.ErrorContext(r.Context(), "render queued station", "err", err)
+		}
 		return
 	}
 
@@ -338,7 +221,7 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 
 	if len(splits) == 0 {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := stationNoSongsTemplate.Execute(w, struct{ Name string }{station.Name}); err != nil {
+		if err := views.StationNoSongs(station.Name).Render(r.Context(), w); err != nil {
 			slog.ErrorContext(r.Context(), "render no songs", "err", err)
 		}
 		return
@@ -354,12 +237,12 @@ func handleStationRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := playerViewTemplate.Execute(w, models.PlayerViewData{
+	if err := views.PlayerView(models.PlayerViewData{
 		Playlist: models.Playlist{Name: station.Name},
 		Songs:    songs,
 		Subtitle: "Radio · " + station.Name,
 		QueueKey: "radio:" + station.Name,
-	}); err != nil {
+	}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render player view", "err", err)
 	}
 }
