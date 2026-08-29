@@ -399,6 +399,21 @@ func handleMusic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log the split behind the served output file at debug level so playback
+	// from the /music/ endpoint can be correlated with the split row. The DB
+	// stores output_path relative to the working directory, so strip any
+	// leading separator before the lookup.
+	lookupPath := strings.TrimPrefix(filepath.ToSlash(full), "/")
+	if s, err := db.FetchSplitByOutputPath(r.Context(), lookupPath); err == nil {
+		slog.DebugContext(r.Context(), "serve split music",
+			"split", s.ID,
+			"song", songTitle(s),
+			"source", s.SourcePath,
+		)
+	} else {
+		slog.DebugContext(r.Context(), "serve split music", "output", full)
+	}
+
 	w.Header().Set("Content-Type", "audio/mpeg")
 	http.ServeFile(w, r, full)
 }

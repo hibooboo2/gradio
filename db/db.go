@@ -83,7 +83,7 @@ func RadioHash(name string) string {
 // The directory is keyed by the hash of the station name rather than the name
 // itself, so any station name is safe to use on disk.
 func RecordingsDir(radio string) string {
-	return filepath.Join("recordings", RadioHash(radio))
+	return filepath.Join("/recordings", RadioHash(radio))
 }
 
 // IsHexHash reports whether s is a 64-character hex string, i.e. a SHA-256
@@ -183,6 +183,7 @@ func CreateSchema(ctx context.Context, db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 		CREATE INDEX IF NOT EXISTS idx_splits_recording ON splits(recording_id);
+		CREATE INDEX IF NOT EXISTS idx_splits_output ON splits(output_path);
 
 		CREATE TABLE IF NOT EXISTS recording_splits (
 			recording_id INT PRIMARY KEY REFERENCES recordings(id) ON DELETE CASCADE,
@@ -614,6 +615,27 @@ func FetchSplit(ctx context.Context, id int64) (models.Split, error) {
 		 FROM splits
 		 WHERE id = $1`,
 		id,
+	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle)
+	if err != nil {
+		return models.Split{}, err
+	}
+
+	return s, nil
+}
+
+// FetchSplitByOutputPath returns the split whose output file is stored at the
+// given path, or an error when no split row references it.
+func FetchSplitByOutputPath(ctx context.Context, outputPath string) (models.Split, error) {
+	if DB == nil {
+		return models.Split{}, fmt.Errorf("nil db")
+	}
+
+	var s models.Split
+	err := DB.QueryRowContext(ctx,
+		`SELECT id, recording_id, source_path, position, start_seconds, end_seconds, output_path, classification, custom_title
+		 FROM splits
+		 WHERE output_path = $1`,
+		outputPath,
 	).Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle)
 	if err != nil {
 		return models.Split{}, err
