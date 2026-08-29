@@ -10,7 +10,7 @@ tmp_dir = "tmp"
   bin = "./tmp/main"
   cmd = "go build -o ./tmp/main ."
   delay = 10000
-  entrypoint = ["./tmp/main","-http","8000","-record"]
+  entrypoint = ["./tmp/main","-http","8110","-record"]
   exclude_dir = ["assets", "tmp", "vendor", "testdata"]
   exclude_file = []
   exclude_regex = ["_test.go"]
@@ -49,10 +49,10 @@ tmp_dir = "tmp"
   clean_on_exit = true
 
 [proxy]
-  app_port = 0
-  app_start_timeout = 0
-  enabled = false
-  proxy_port = 0
+  app_port = 8110
+  app_start_timeout = 250
+  enabled = true
+  proxy_port = 8000
 
 [screen]
   clear_on_rebuild = true
