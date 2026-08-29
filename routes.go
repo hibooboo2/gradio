@@ -438,7 +438,7 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	order := []string{}
 	byRadio := map[string][]models.Split{}
 	for _, s := range splits {
-		radio := radioFromPath(r.Context(), s.SourcePath)
+		radio := views.RadioFromPath(r.Context(), s.SourcePath)
 		if _, ok := byRadio[radio]; !ok {
 			order = append(order, radio)
 		}
@@ -463,17 +463,4 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	if err := views.SplitsView(groups).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render splits view", "err", err)
 	}
-}
-
-// radioFromPath extracts the radio name from a source file path. Files are
-// stored as recordings/<hash>/<file>.mp3 (or recordings/<radio>/<file>.mp3 for
-// legacy recordings), or directly in recordings/ when no radio directory is
-// present. A hashed directory is resolved back to the original station name
-// via the recordings table so the UI shows display names, not hashes.
-func radioFromPath(ctx context.Context, path string) string {
-	dir := filepath.Base(filepath.Dir(path))
-	if dir == "." || dir == "" || dir == "recordings" {
-		return "manual"
-	}
-	return db.RadioDisplayName(ctx, dir)
 }

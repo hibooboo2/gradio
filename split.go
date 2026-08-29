@@ -16,6 +16,7 @@ import (
 
 	"github.com/hibooboo2/gradio/db"
 	"github.com/hibooboo2/gradio/models"
+	"github.com/hibooboo2/gradio/views"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -222,7 +223,7 @@ func resplitSplit(ctx context.Context, splitID int64, cut float64) (original mod
 		return models.Split{}, models.Split{}, models.Split{}, fmt.Errorf("allocate split positions: %w", err)
 	}
 
-	radio := radioFromPath(ctx, orig.SourcePath)
+	radio := views.RadioFromPath(ctx, orig.SourcePath)
 	// Prefer the original station name from the recordings table: the source
 	// path's directory is a hash, not the display name.
 	if rec, err := db.FetchRecordingByID(ctx, orig.RecordingID); err == nil {
@@ -560,7 +561,7 @@ func mergeSplit(ctx context.Context, id int64, prev bool) (current models.Split,
 		return models.Split{}, nil, models.Split{}, fmt.Errorf("allocate split position: %w", err)
 	}
 
-	radio := radioFromPath(ctx, cur.SourcePath)
+	radio := views.RadioFromPath(ctx, cur.SourcePath)
 	// Prefer the original station name from the recordings table: the source
 	// path's directory is a hash, not the display name.
 	if rec.Radio != "" {

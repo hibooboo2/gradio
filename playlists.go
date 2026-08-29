@@ -20,7 +20,7 @@ import (
 // output file, e.g. "Slotex · gradio-2026-08-19_09-47-01 #3".
 func derivedSongTitle(s models.Split) string {
 	base := strings.TrimSuffix(filepath.Base(s.SourcePath), filepath.Ext(s.SourcePath))
-	radio := radioFromPath(context.Background(), s.SourcePath)
+	radio := views.RadioFromPath(context.Background(), s.SourcePath)
 	return fmt.Sprintf("%s · %s #%d", radio, base, s.Index+1)
 }
 
