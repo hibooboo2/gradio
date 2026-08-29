@@ -14,7 +14,8 @@ import (
 // handleStationsView renders the Radio Stations tab fragment listing every
 // station in the radio_stations table with its current recording state.
 func handleStationsView(w http.ResponseWriter, r *http.Request) {
-	stations, err := db.FetchRadioStations(r.Context())
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	stations, err := db.FetchRadioStations(r.Context(), q)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "list radio stations", "err", err)
 		http.Error(w, "failed to load radio stations", http.StatusInternalServerError)
@@ -43,7 +44,7 @@ func handleStationsView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := views.StationsView(models.StationsViewData{Stations: rows}).Render(r.Context(), w); err != nil {
+	if err := views.StationsView(models.StationsViewData{Stations: rows, Query: q}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render stations view", "err", err)
 	}
 }

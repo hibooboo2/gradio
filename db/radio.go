@@ -44,19 +44,33 @@ func UpsertRadioStations(ctx context.Context, stations []models.RadioStation) er
 	return err
 }
 
-// FetchRadioStations returns every station in the radio_stations table.
-func FetchRadioStations(ctx context.Context) ([]models.RadioStation, error) {
+// FetchRadioStations returns stations from the radio_stations table. When q is
+// non-empty it is a name search (case-insensitive substring, LIKE wildcards
+// escaped) ordered by name, limited to 50 rows. Otherwise it returns 20 random
+// stations.
+func FetchRadioStations(ctx context.Context, q string) ([]models.RadioStation, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
 	}
 
-	rows, err := DB.QueryContext(ctx,
-		`SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
+	q = strings.TrimSpace(q)
+	var query string
+	var args []any
+	if q != "" {
+		query = `SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
+			FROM radio_stations
+			WHERE name ILIKE '%' || $1 || '%' ESCAPE '\'
+			ORDER BY name
+			LIMIT 50`
+		args = append(args, escapeLike(q))
+	} else {
+		query = `SELECT stationuuid, name, url_resolved, favicon, tags, countrycode, languagecodes
 			FROM radio_stations
 			order by random()
-			LIMIT 20
-		 `,
-	)
+			LIMIT 20`
+	}
+
+	rows, err := DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +88,17 @@ func FetchRadioStations(ctx context.Context) ([]models.RadioStation, error) {
 	return stations, rows.Err()
 }
 
+// escapeLike escapes LIKE wildcard characters so user input is matched
+// literally.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
 // FetchRadioStationURLs returns every station url_resolved keyed by its name,
 // so recording can pick a station by name.
 func FetchRadioStationURLs(ctx context.Context) (map[string]string, error) {
-	stations, err := FetchRadioStations(ctx)
+	stations, err := FetchRadioStations(ctx, "")
 	if err != nil {
 		return nil, err
 	}

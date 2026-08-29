@@ -264,9 +264,24 @@ func TestRadioStationDB(t *testing.T) {
 		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream", Favicon: "https://a.example/new-icon.png", Tags: "jazz,pop,rock", CountryCode: "US", LanguageCodes: "eng"},
 	}))
 
-	stations, err := db.FetchRadioStations(t.Context())
+	stations, err := db.FetchRadioStations(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, stations, 3, "upsert must not create duplicate rows")
+
+	// Name search is case-insensitive substring matching.
+	alpha, err := db.FetchRadioStations(t.Context(), "alp")
+	require.NoError(t, err)
+	require.Len(t, alpha, 1)
+	require.Equal(t, "Alpha", alpha[0].Name)
+
+	none, err := db.FetchRadioStations(t.Context(), "zzz")
+	require.NoError(t, err)
+	require.Empty(t, none)
+
+	// LIKE wildcards in the query are matched literally, not expanded.
+	wild, err := db.FetchRadioStations(t.Context(), "%")
+	require.NoError(t, err)
+	require.Empty(t, wild)
 
 	urls, err := db.FetchRadioStationURLs(t.Context())
 	require.NoError(t, err)

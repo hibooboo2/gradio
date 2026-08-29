@@ -14,6 +14,8 @@ type StationViewRow struct {
 // fragments.
 type StationsViewData struct {
 	Stations []StationViewRow
+	// Query is the current name search, kept so the search box keeps its value.
+	Query string
 }
 
 // StationRecordResponse is the JSON payload returned by

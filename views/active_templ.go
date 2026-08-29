@@ -44,7 +44,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(len(data.Active))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 14, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 14, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -57,7 +57,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 		var templ_7745c5c3_Var3 string
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(Plural(len(data.Active), "recording"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 14, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 14, Col: 65}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {
@@ -75,7 +75,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(len(data.Queued))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 16, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 16, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -112,7 +112,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(a.URL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 39, Col: 69}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 39, Col: 69}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 					if templ_7745c5c3_Err != nil {
@@ -134,7 +134,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var7 string
 					templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(a.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 39, Col: 178}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 39, Col: 178}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 					if templ_7745c5c3_Err != nil {
@@ -148,7 +148,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var8 string
 					templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(a.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 41, Col: 17}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 41, Col: 17}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 					if templ_7745c5c3_Err != nil {
@@ -163,7 +163,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var9 string
 					templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(a.Domain)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 47, Col: 18}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 47, Col: 18}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 					if templ_7745c5c3_Err != nil {
@@ -182,7 +182,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 				var templ_7745c5c3_Var10 string
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(TimeFmt(a.Started))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 52, Col: 30}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 52, Col: 30}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 				if templ_7745c5c3_Err != nil {
@@ -196,7 +196,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var11 string
 					templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(a.Duration)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 55, Col: 20}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 55, Col: 20}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 					if templ_7745c5c3_Err != nil {
@@ -215,7 +215,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 				var templ_7745c5c3_Var12 string
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("%d bytes", a.BufferBytes))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 60, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 60, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 				if templ_7745c5c3_Err != nil {
@@ -229,7 +229,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(a.BufferHuman)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 62, Col: 23}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 62, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 					if templ_7745c5c3_Err != nil {
@@ -269,7 +269,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(q.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 90, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 90, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -282,7 +282,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(q.Domain)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 92, Col: 20}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 92, Col: 20}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -295,7 +295,7 @@ func ActiveView(data models.ActiveRecordingsViewData) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(q.Position)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `active.templ`, Line: 93, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/active.templ`, Line: 93, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {

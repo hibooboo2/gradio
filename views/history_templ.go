@@ -43,7 +43,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(HistorySummary(data.Total, data.Sort, data.Group))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 13, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 13, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -93,7 +93,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var3 string
 					templ_7745c5c3_Var3, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues("background:" + g.Color)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 44, Col: 63}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 44, Col: 63}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 					if templ_7745c5c3_Err != nil {
@@ -106,7 +106,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(g.Radio)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 44, Col: 75}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 44, Col: 75}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -119,7 +119,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(len(g.Plays))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 45, Col: 40}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 45, Col: 40}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -132,7 +132,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var6 string
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(Plural(len(g.Plays), "song"))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 45, Col: 73}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 45, Col: 73}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -151,7 +151,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 							var templ_7745c5c3_Var7 string
 							templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(SongTitle(e.Split))
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 60, Col: 34}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 60, Col: 34}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 							if templ_7745c5c3_Err != nil {
@@ -164,7 +164,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 							var templ_7745c5c3_Var8 string
 							templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(e.Plays)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 61, Col: 23}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 61, Col: 23}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 							if templ_7745c5c3_Err != nil {
@@ -177,7 +177,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 							var templ_7745c5c3_Var9 string
 							templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(TimeFmt(e.LastPlayed))
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 62, Col: 37}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 62, Col: 37}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 							if templ_7745c5c3_Err != nil {
@@ -190,7 +190,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 							var templ_7745c5c3_Var10 string
 							templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(TimeFmt(e.FirstPlayed))
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 63, Col: 38}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 63, Col: 38}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 							if templ_7745c5c3_Err != nil {
@@ -232,7 +232,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var11 string
 					templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(SongTitle(e.Split))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 91, Col: 31}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 91, Col: 31}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 					if templ_7745c5c3_Err != nil {
@@ -245,7 +245,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var12 string
 					templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(e.Radio)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 92, Col: 20}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 92, Col: 20}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 					if templ_7745c5c3_Err != nil {
@@ -258,7 +258,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(e.Plays)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 93, Col: 20}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 93, Col: 20}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 					if templ_7745c5c3_Err != nil {
@@ -271,7 +271,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var14 string
 					templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(TimeFmt(e.LastPlayed))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 94, Col: 34}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 94, Col: 34}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 					if templ_7745c5c3_Err != nil {
@@ -284,7 +284,7 @@ func HistoryView(data models.HistoryViewData) templ.Component {
 					var templ_7745c5c3_Var15 string
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(TimeFmt(e.FirstPlayed))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 95, Col: 35}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/history.templ`, Line: 95, Col: 35}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {

@@ -272,6 +272,22 @@ func TestStationsView(t *testing.T) {
 	require.Contains(t, body, "station-1")
 	require.Contains(t, body, "Record &amp; Play")
 
+	// Searching by name filters the station list.
+	req = authedRequest(t, http.MethodGet, "/stations/view?q=alpha", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.Contains(t, body, "Alpha FM")
+	require.NotContains(t, body, "Beta Radio")
+
+	// A search with no matches shows the empty message.
+	req = authedRequest(t, http.MethodGet, "/stations/view?q=zzz", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "No stations match")
+
 	// Clicking a station with no recorded songs starts recording and shows the
 	// no-songs message instead of an empty player.
 	req = authedRequest(t, http.MethodPost, "/stations/station-1/record", nil)

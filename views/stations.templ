@@ -77,34 +77,53 @@ templ stationRow(s models.StationViewRow, showStar bool) {
 	</tr>
 }
 
-// StationsView renders the Radio Stations tab fragment: every station from the
-// radio_stations table with a play/record button.
+// StationsView renders the Radio Stations tab fragment: a search box that
+// filters stations by name plus a table of the current results.
 templ StationsView(data models.StationsViewData) {
 	<div class="view-header">
 		<h2>Radio Stations</h2>
-		<p>{ len(data.Stations) } { Plural(len(data.Stations), "station") } &mdash; click one to start recording and play its songs</p>
 	</div>
 
-	if len(data.Stations) > 0 {
-		<table class="station-table">
-			<thead>
-				<tr>
-					<th>Station</th>
-					<th>Country</th>
-					<th>Language</th>
-					<th>Tags</th>
-					<th></th>
-				</tr>
-			</thead>
-			<tbody>
-				for _, s := range data.Stations {
-					@stationRow(s, false)
-				}
-			</tbody>
-		</table>
-	} else {
-		<p class="empty">No radio stations loaded yet. Run <code>gradio -sync</code> to populate the stations table.</p>
+	if len(data.Stations) > 0 || data.Query != "" {
+		<div class="station-search">
+			<input type="search" name="q" value={ data.Query } placeholder="Search stations by name"
+				aria-label="Search stations by name" autocomplete="off"
+				hx-get="/stations/view" hx-trigger="input changed delay:300ms, search"
+				hx-include="this" hx-target="#station-results" hx-swap="innerHTML">
+		</div>
 	}
+
+	<div id="station-results">
+		if len(data.Stations) > 0 {
+			if data.Query != "" {
+				<p class="station-count">{ len(data.Stations) } { Plural(len(data.Stations), "station") } matching "{ data.Query }"</p>
+			} else {
+				<p class="station-count">{ len(data.Stations) } { Plural(len(data.Stations), "station") } &mdash; click one to start recording and play its songs</p>
+			}
+			<table class="station-table">
+				<thead>
+					<tr>
+						<th>Station</th>
+						<th>Country</th>
+						<th>Language</th>
+						<th>Tags</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, s := range data.Stations {
+						@stationRow(s, false)
+					}
+				</tbody>
+			</table>
+		} else {
+			if data.Query != "" {
+				<p class="empty">No stations match "{ data.Query }"</p>
+			} else {
+				<p class="empty">No radio stations loaded yet. Run <code>gradio -sync</code> to populate the stations table.</p>
+			}
+		}
+	</div>
 }
 
 // FavoritesView renders the Favorites tab fragment: only the stations that

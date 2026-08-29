@@ -37,7 +37,7 @@ func StationNoSongs(name string) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `station_no_songs.templ`, Line: 7, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/station_no_songs.templ`, Line: 7, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -81,7 +81,7 @@ func QueuedStation(name, domain string, position int) templ.Component {
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `station_no_songs.templ`, Line: 16, Col: 25}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/station_no_songs.templ`, Line: 16, Col: 25}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -94,7 +94,7 @@ func QueuedStation(name, domain string, position int) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(domain)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `station_no_songs.templ`, Line: 16, Col: 78}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/station_no_songs.templ`, Line: 16, Col: 78}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
@@ -107,7 +107,7 @@ func QueuedStation(name, domain string, position int) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(position)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `station_no_songs.templ`, Line: 16, Col: 101}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/station_no_songs.templ`, Line: 16, Col: 101}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {

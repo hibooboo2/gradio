@@ -48,7 +48,7 @@ func TestRecordOnceConcurrent30s(t *testing.T) {
 	// Seed real stations so RecordOnce has live streams to hit.
 	seedTestStations(t)
 
-	stations, err := db.FetchRadioStations(t.Context())
+	stations, err := db.FetchRadioStations(t.Context(), "")
 	require.NoError(t, err)
 
 	// Pick up to 5 stations with a resolvable URL (deduped by name so two

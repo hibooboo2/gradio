@@ -44,7 +44,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 				var templ_7745c5c3_Var2 string
 				templ_7745c5c3_Var2, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues("background:" + g.Color)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 14, Col: 62}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 14, Col: 62}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 				if templ_7745c5c3_Err != nil {
@@ -57,7 +57,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(g.Radio)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 14, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 14, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -70,7 +70,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(len(g.Splits))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 15, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 15, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -83,7 +83,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(Plural(len(g.Splits), "split"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 15, Col: 75}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 15, Col: 75}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -107,7 +107,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var7 string
 						templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var6).String())
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 1, Col: 0}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 1, Col: 0}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 						if templ_7745c5c3_Err != nil {
@@ -120,7 +120,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var8 string
 						templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(s.ID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 35, Col: 19}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 35, Col: 19}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 						if templ_7745c5c3_Err != nil {
@@ -133,7 +133,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var9 string
 						templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(DerivedSongTitle(s))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 37, Col: 76}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 37, Col: 76}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 						if templ_7745c5c3_Err != nil {
@@ -146,7 +146,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var10 string
 						templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(SongTitle(s))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 37, Col: 93}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 37, Col: 93}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 						if templ_7745c5c3_Err != nil {
@@ -159,7 +159,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var11 string
 						templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(s.ID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 38, Col: 84}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 38, Col: 84}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 						if templ_7745c5c3_Err != nil {
@@ -172,7 +172,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var12 string
 						templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(s.SourcePath)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 40, Col: 27}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 40, Col: 27}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 						if templ_7745c5c3_Err != nil {
@@ -185,7 +185,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var13 string
 						templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(s.Index)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 41, Col: 22}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 41, Col: 22}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 						if templ_7745c5c3_Err != nil {
@@ -198,7 +198,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var14 string
 						templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(FmtFloat(s.Start))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 42, Col: 32}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 42, Col: 32}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 						if templ_7745c5c3_Err != nil {
@@ -211,7 +211,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var15 string
 						templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(FmtFloat(s.End))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 43, Col: 30}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 43, Col: 30}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 						if templ_7745c5c3_Err != nil {
@@ -224,7 +224,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var16 string
 						templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(FmtFloat(s.Duration()))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 44, Col: 37}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 44, Col: 37}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 						if templ_7745c5c3_Err != nil {
@@ -237,7 +237,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var17 string
 						templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(ClsLabel(s.Classification))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 45, Col: 41}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 45, Col: 41}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 						if templ_7745c5c3_Err != nil {
@@ -250,7 +250,7 @@ func SplitsView(groups []models.RadioGroup) templ.Component {
 						var templ_7745c5c3_Var18 string
 						templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(s.OutputPath)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `splits.templ`, Line: 46, Col: 27}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/splits.templ`, Line: 46, Col: 27}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 						if templ_7745c5c3_Err != nil {
