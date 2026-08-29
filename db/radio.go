@@ -3,7 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/hibooboo2/gradio/models"
 )
@@ -178,6 +181,108 @@ func FetchFavoriteUUIDs(ctx context.Context) (map[string]struct{}, error) {
 		favs[uuid] = struct{}{}
 	}
 	return favs, rows.Err()
+}
+
+var (
+	hashNameMu    sync.Mutex
+	hashNameCache map[string]string
+	hashNameBuilt time.Time
+)
+
+const hashNameCacheTTL = 10 * time.Minute
+
+// RadioNameByHash resolves a hashed recordings directory back to the station
+// name by matching SHA-256(station name) against the radio_stations table. It
+// returns "" when no station matches. The name map is cached for
+// hashNameCacheTTL (stations are only re-synced at startup).
+func RadioNameByHash(ctx context.Context, hash string) string {
+	hashNameMu.Lock()
+	built, cache := hashNameBuilt, hashNameCache
+	hashNameMu.Unlock()
+
+	if cache == nil || time.Since(built) > hashNameCacheTTL {
+		now := time.Now()
+		rebuilt := buildHashNameCache(ctx)
+		hashNameMu.Lock()
+		if hashNameCache == nil || time.Since(hashNameBuilt) > hashNameCacheTTL {
+			hashNameCache = rebuilt
+			hashNameBuilt = now
+		}
+		cache = hashNameCache
+		hashNameMu.Unlock()
+	}
+	return cache[hash]
+}
+
+// buildHashNameCache queries every station name and returns a map from its
+// hashed recordings directory to the display name. It is built outside the
+// mutex so a slow 63k-row query never blocks concurrent callers; on any error
+// (including a nil DB handle) it returns an empty map.
+func buildHashNameCache(ctx context.Context) map[string]string {
+	m := make(map[string]string)
+	if DB == nil {
+		return m
+	}
+
+	rows, err := DB.Query(ctx, `SELECT name FROM radio_stations`)
+	if err != nil {
+		return m
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return m
+		}
+		m[RadioHash(name)] = name
+	}
+	if err := rows.Err(); err != nil {
+		return m
+	}
+	return m
+}
+
+// RepairHashedRadioNames rewrites recordings.radio values that are SHA-256
+// hashes of a station name back to the display name. Rows whose hash cannot
+// be resolved (station no longer in the table) are left untouched. Idempotent
+// and cheap after the first run (no hashes remain).
+func RepairHashedRadioNames(ctx context.Context) error {
+	if DB == nil {
+		return nil
+	}
+
+	rows, err := DB.Query(ctx, `SELECT DISTINCT radio FROM recordings`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var hashes []string
+	for rows.Next() {
+		var radio string
+		if err := rows.Scan(&radio); err != nil {
+			return err
+		}
+		if IsHexHash(radio) {
+			hashes = append(hashes, radio)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, hash := range hashes {
+		name := RadioNameByHash(ctx, hash)
+		if name == "" || name == hash {
+			continue
+		}
+		if _, err := DB.Exec(ctx, `UPDATE recordings SET radio = $1 WHERE radio = $2`, name, hash); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "repaired hashed radio name", "hash", hash, "name", name)
+	}
+	return nil
 }
 
 // FetchFavoriteStations returns the favorited stations, ordered by when they

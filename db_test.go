@@ -294,3 +294,100 @@ func TestRadioStationDB(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defaultURLs(), radioURLs(t.Context()))
 }
+
+// TestRadioNameResolution covers resolving hashed recordings directories back
+// to station names: through the radio_stations table (RadioNameByHash), the
+// RadioDisplayName fallback when the recordings table holds a stored hash
+// (written while the DB was wiped), and the dual name/hash match in
+// FetchRadioSplits so legacy hash-named rows still play.
+func TestRadioNameResolution(t *testing.T) {
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	admin.Close()
+
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
+
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
+
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
+		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream"},
+		{StationUUID: "uuid-2", Name: "Beta Radio", URLResolved: "https://b.example/stream"},
+	}))
+
+	h := db.RadioHash("Alpha")
+	require.Equal(t, "Alpha", db.RadioNameByHash(t.Context(), h))
+	require.Empty(t, db.RadioNameByHash(t.Context(), db.RadioHash("Missing Station")))
+
+	// With no recordings rows the stations-table fallback fires.
+	require.Equal(t, "Alpha", db.RadioDisplayName(t.Context(), h))
+	require.Equal(t, "LegacyRadio", db.RadioDisplayName(t.Context(), "LegacyRadio"))
+
+	// Insert a pre-fix hash-named recording row: the recordings lookup now
+	// returns a hash, so the fallback must still resolve it to the display name.
+	id, err := db.InsertRecording(t.Context(), "recordings/"+h+"/x.mp3", h, time.Now(), 123)
+	require.NoError(t, err)
+	require.Equal(t, "Alpha", db.RadioDisplayName(t.Context(), h))
+
+	// FetchRadioSplits matches both the display name and its hash.
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
+		RecordingID: id,
+		SourcePath:  "recordings/" + h + "/x.mp3",
+		Index:       0,
+		Start:       0,
+		End:         10,
+		OutputPath:  "split_music/x/output_00000.mp3",
+	}))
+	splits, err := db.FetchRadioSplits(t.Context(), "Alpha", 10)
+	require.NoError(t, err)
+	require.Len(t, splits, 1)
+	splits, err = db.FetchRadioSplits(t.Context(), h, 10)
+	require.NoError(t, err)
+	require.Len(t, splits, 1)
+}
+
+// TestRepairHashedRadioNames covers RepairHashedRadioNames: hash-named
+// recordings rows are rewritten back to the station display name while
+// already-named rows are untouched, and a second run is a no-op.
+func TestRepairHashedRadioNames(t *testing.T) {
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	admin.Close()
+
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
+
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings; DROP TABLE IF EXISTS favorites; DROP TABLE IF EXISTS radio_stations;`)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
+
+	require.NoError(t, db.UpsertRadioStations(t.Context(), []models.RadioStation{
+		{StationUUID: "uuid-1", Name: "Alpha", URLResolved: "https://a.example/stream"},
+		{StationUUID: "uuid-2", Name: "Beta", URLResolved: "https://b.example/stream"},
+	}))
+
+	hash := db.RadioHash("Alpha")
+	_, err = db.InsertRecording(t.Context(), "recordings/"+hash+"/y.mp3", hash, time.Now(), 123)
+	require.NoError(t, err)
+	_, err = db.InsertRecording(t.Context(), "recordings/Beta/y.mp3", "Beta", time.Now(), 123)
+	require.NoError(t, err)
+
+	require.NoError(t, db.RepairHashedRadioNames(t.Context()))
+
+	rec, err := db.FetchRecordingByPath(t.Context(), "recordings/"+hash+"/y.mp3")
+	require.NoError(t, err)
+	require.Equal(t, "Alpha", rec.Radio)
+
+	rec, err = db.FetchRecordingByPath(t.Context(), "recordings/Beta/y.mp3")
+	require.NoError(t, err)
+	require.Equal(t, "Beta", rec.Radio)
+
+	// A second repair run is a no-op: no hashes remain.
+	require.NoError(t, db.RepairHashedRadioNames(t.Context()))
+}

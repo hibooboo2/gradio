@@ -105,9 +105,11 @@ func IsHexHash(s string) bool {
 }
 
 // RadioDisplayName resolves a hashed recordings directory back to the original
-// station name by looking it up in the recordings table. When dir is not a
-// hash, or the lookup fails, dir is returned unchanged so legacy (un-hashed)
-// paths keep working.
+// station name. A row in the recordings table is used first, but only when it
+// holds a real display name: a stored hash (written while the recordings table
+// was wiped) falls through to the radio_stations table so the station name
+// still wins. When dir is not a hash, or neither lookup succeeds, dir is
+// returned unchanged so legacy (un-hashed) paths keep working.
 func RadioDisplayName(ctx context.Context, dir string) string {
 	if !IsHexHash(dir) || DB == nil {
 		return dir
@@ -118,10 +120,14 @@ func RadioDisplayName(ctx context.Context, dir string) string {
 		`SELECT radio FROM recordings WHERE source_path LIKE $1 LIMIT 1`,
 		"%"+dir+"/%",
 	).Scan(&radio)
-	if err != nil {
-		return dir
+	if err == nil && !IsHexHash(radio) {
+		return radio
 	}
-	return radio
+
+	if name := RadioNameByHash(ctx, dir); name != "" {
+		return name
+	}
+	return dir
 }
 
 // CreateDBHandle opens the database connection, ensures the schema exists, and
@@ -748,7 +754,10 @@ func FetchAllRecordings(ctx context.Context) ([]models.Recording, error) {
 
 // FetchRadios returns the distinct radios that have at least one split, with
 // their split counts, ordered by name. The radio name comes from the
-// recordings table, which is set when a source stream is saved.
+// recordings table, which is set when a source stream is saved. Hashed radio
+// values are resolved back to their display name via the radio_stations table,
+// and groups that resolve to the same display name (name rows plus legacy hash
+// rows of the same station) are merged with their split counts summed.
 func FetchRadios(ctx context.Context) ([]models.Radio, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
@@ -772,14 +781,37 @@ func FetchRadios(ctx context.Context) ([]models.Radio, error) {
 		if err := rows.Scan(&radio.Name, &radio.SplitCount); err != nil {
 			return nil, err
 		}
+		if IsHexHash(radio.Name) {
+			if name := RadioNameByHash(ctx, radio.Name); name != "" {
+				radio.Name = name
+			}
+		}
 		radios = append(radios, radio)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-	return radios, rows.Err()
+	// Merge duplicate display names, summing split counts and preserving
+	// first-seen order.
+	merged := make([]models.Radio, 0, len(radios))
+	seen := make(map[string]int, len(radios))
+	for _, r := range radios {
+		if i, ok := seen[r.Name]; ok {
+			merged[i].SplitCount += r.SplitCount
+			continue
+		}
+		seen[r.Name] = len(merged)
+		merged = append(merged, r)
+	}
+
+	return merged, nil
 }
 
 // FetchRadioSplits returns up to limit random splits belonging to the given
-// radio, in random order, so a radio can be "played" as a shuffled queue.
+// radio, in random order, so a radio can be "played" as a shuffled queue. The
+// match covers both the display name and its SHA-256 hash, so legacy
+// hash-named rows still play even before RepairHashedRadioNames has run.
 func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
@@ -791,10 +823,10 @@ func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]models.Sp
 		 FROM splits s
 		 JOIN recordings r ON r.id = s.recording_id
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
-		 WHERE r.radio = $1
+		 WHERE (r.radio = $1 OR r.radio = $2)
 		 ORDER BY random()
-		 LIMIT $2`,
-		radio, limit,
+		 LIMIT $3`,
+		radio, RadioHash(radio), limit,
 	)
 	if err != nil {
 		return nil, err
