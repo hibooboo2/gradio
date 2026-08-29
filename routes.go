@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -82,6 +84,8 @@ func serveAPI(ctx context.Context, addr string) error {
 //	POST   /api/splits/{id}/play  record that a split was listened to
 //	POST   /api/splits/{id}/rating  like/dislike a split ({"rating":"like"|"dislike"|""})
 //	POST   /api/splits/{id}/resplit  cut a split at {"cut":seconds} into two new splits
+//	GET    /api/splits/{id}/audio extract the split's segment from its source
+//	                            recording with ffmpeg and stream it as audio/mpeg
 //	GET    /recordings            list all recordings
 //	GET    /music/{path...}       serve a split output file from split_music/
 //
@@ -134,6 +138,7 @@ func routes() http.Handler {
 	mux.HandleFunc("POST /api/splits/{id}/rating", handleSetRating)
 	mux.HandleFunc("POST /api/splits/{id}/resplit", handleResplitSplit)
 	mux.HandleFunc("POST /api/splits/{id}/merge", handleMergeSplit)
+	mux.HandleFunc("GET /api/splits/{id}/audio", handleSplitAudio)
 
 	// Global shuffle queue (JSON) for the player's Shuffle All mode.
 	mux.HandleFunc("GET /api/shuffle", handleShuffleJSON)
@@ -419,6 +424,87 @@ func handleMergeSplit(w http.ResponseWriter, r *http.Request) {
 		"other":   other,
 		"merged":  merged,
 	})
+}
+
+// handleSplitAudio extracts the split's segment from its source recording with
+// ffmpeg on demand and streams the mp3 back as the response body. The split's
+// current start/end boundaries are always honored, even when the on-disk split
+// output file predates a PATCH that changed them: the segment is cut fresh from
+// the original recording every time, so the served audio always matches the
+// split row.
+func handleSplitAudio(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid split id")
+		return
+	}
+
+	split, err := db.FetchSplit(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "split not found")
+		return
+	}
+	if split.Start < 0 || split.End <= split.Start {
+		writeError(w, http.StatusBadRequest, "split has invalid start/end boundaries")
+		return
+	}
+
+	rec, err := db.FetchRecordingByID(r.Context(), split.RecordingID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "source recording not found")
+		return
+	}
+
+	inputPath := rec.SourcePath
+	if !filepath.IsAbs(inputPath) {
+		wd, _ := os.Getwd()
+		inputPath = filepath.Join(wd, inputPath)
+	}
+	if _, err := os.Stat(inputPath); err != nil {
+		writeError(w, http.StatusNotFound, "source recording not found")
+		return
+	}
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		slog.ErrorContext(r.Context(), "split audio ffmpeg missing", "err", err)
+		writeError(w, http.StatusInternalServerError, "ffmpeg not available")
+		return
+	}
+
+	slog.DebugContext(r.Context(), "serve split audio",
+		"split", split.ID,
+		"song", songTitle(split),
+		"source", inputPath,
+	)
+
+	// Stream the segment straight to the client: ffmpeg's stdout is the
+	// response body, so no temp file is written. The -ss/-to input options
+	// mirror writeSegment, giving the same fast-seek extraction the split
+	// pipeline uses.
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "no-store")
+
+	cmd := exec.CommandContext(
+		r.Context(),
+		"ffmpeg",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-ss", formatTime(split.Start),
+		"-to", formatTime(split.End),
+		"-i", inputPath,
+		"-map", "0:a:0",
+		"-c:a", "libmp3lame",
+		"-b:a", "196k",
+		"-f", "mp3",
+		"pipe:1",
+	)
+	cmd.Stdout = w
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// The 200 and Content-Type are already sent, so the client saw a
+		// truncated body; log for diagnosis.
+		slog.ErrorContext(r.Context(), "split audio ffmpeg", "err", err, "split", id)
+	}
 }
 
 // radioPalette assigns a stable color to each distinct radio.

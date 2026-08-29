@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -298,4 +300,116 @@ func splitByIndex(t *testing.T, splits []models.Split, index int) models.Split {
 	}
 	t.Fatalf("no split with index %d", index)
 	return models.Split{}
+}
+
+// TestSplitAudioEndpoint verifies GET /api/splits/{id}/audio extracts the
+// split's segment from its source recording with ffmpeg and streams it back as
+// audio/mpeg, honoring the split's current start/end boundaries even after a
+// PATCH changed them.
+func TestSplitAudioEndpoint(t *testing.T) {
+	fixture := buildSilenceFixture(t, "split-audio.mp3")
+
+	admin, err := sql.Open("pgx", "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	require.NoError(t, admin.Close())
+
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
+
+	_, err = db.DB.ExecContext(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
+
+	recID, err := db.InsertRecording(t.Context(), fixture, "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
+		RecordingID: recID,
+		SourcePath:  fixture,
+		Index:       0,
+		Start:       10.0,
+		End:         20.0,
+		OutputPath:  "split_music/TestRadio/split-audio/output_00000.mp3",
+	}))
+	// A split whose source recording is missing from disk.
+	missingRecID, err := db.InsertRecording(t.Context(), "/tmp/does-not-exist.mp3", "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+	require.NoError(t, db.InsertSplit(t.Context(), models.Split{
+		RecordingID: missingRecID,
+		SourcePath:  "/tmp/does-not-exist.mp3",
+		Index:       0,
+		Start:       0,
+		End:         5,
+		OutputPath:  "split_music/TestRadio/split-audio/output_00001.mp3",
+	}))
+
+	splits, err := db.FetchSplitsForRecording(t.Context(), recID)
+	require.NoError(t, err)
+	require.Len(t, splits, 1)
+	missingSplits, err := db.FetchSplitsForRecording(t.Context(), missingRecID)
+	require.NoError(t, err)
+	require.Len(t, missingSplits, 1)
+
+	server := httptest.NewServer(routes())
+	defer server.Close()
+
+	audioURL := server.URL + "/api/splits/" + strconv.FormatInt(splits[0].ID, 10) + "/audio"
+
+	t.Run("streams the split from its source", func(t *testing.T) {
+		resp, err := authedClient().Get(audioURL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, "audio/mpeg", resp.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NotEmpty(t, body)
+
+		out := filepath.Join(t.TempDir(), "split-audio.mp3")
+		require.NoError(t, os.WriteFile(out, body, 0o644))
+		d, err := fileDuration(out)
+		require.NoError(t, err)
+		require.InDelta(t, 10.0, d, 1.0, "served audio should match the split duration")
+	})
+
+	t.Run("honors updated boundaries", func(t *testing.T) {
+		body := `{"start": 5, "end": 12}`
+		req, err := http.NewRequest(http.MethodPatch, server.URL+"/splits/"+strconv.FormatInt(splits[0].ID, 10), bytes.NewBufferString(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := authedClient().Do(req)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		resp, err = authedClient().Get(audioURL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		audio, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NotEmpty(t, audio)
+
+		out := filepath.Join(t.TempDir(), "split-audio-2.mp3")
+		require.NoError(t, os.WriteFile(out, audio, 0o644))
+		d, err := fileDuration(out)
+		require.NoError(t, err)
+		require.InDelta(t, 7.0, d, 1.0, "served audio should track the patched boundaries")
+	})
+
+	t.Run("missing split is 404", func(t *testing.T) {
+		resp, err := authedClient().Get(server.URL + "/api/splits/999999999/audio")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("missing source recording is 404", func(t *testing.T) {
+		resp, err := authedClient().Get(server.URL + "/api/splits/" + strconv.FormatInt(missingSplits[0].ID, 10) + "/audio")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
 }
