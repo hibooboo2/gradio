@@ -461,6 +461,20 @@
 			font-size: 0.8rem;
 			font-variant-numeric: tabular-nums;
 		}
+		.source-row {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			width: 100%;
+			max-width: 16rem;
+			margin-top: 1.25rem;
+		}
+		.src-toggle-label {
+			color: var(--muted);
+			font-size: 0.85rem;
+			transition: color 0.2s ease;
+		}
+		.src-toggle.active + .src-toggle-label { color: var(--accent); }
 		.mark-row {
 			display: flex;
 			justify-content: center;
@@ -1180,7 +1194,12 @@
 			audio.style.display = 'none';
 
 			const VOLUME_KEY = 'gradio-player-volume';
+			const SRC_MODE_KEY = 'gradio-player-src-mode';
 			audio.volume = parseFloat(localStorage.getItem(VOLUME_KEY) || '0.85');
+			// 'music' = /music/... split output files (default); 'api' =
+			// /api/splits/{id}/audio, a fresh extraction from the source
+			// recording. Read once here so the choice survives reloads.
+			let srcMode = localStorage.getItem(SRC_MODE_KEY) === 'api' ? 'api' : 'music';
 
 			let queue = [];
 			let index = -1;
@@ -1209,6 +1228,16 @@
 
 			function current() {
 				return (index >= 0 && index < queue.length) ? queue[index] : null;
+			}
+
+			// Effective audio URL for a track. When the src toggle is ON and the
+			// track has a split id, use the /api/splits/{id}/audio endpoint (fresh
+			// ffmpeg extraction from the source recording); otherwise fall back to
+			// the original /music/... split output file. Decided at play time so
+			// the toggle stays reversible and survives server re-renders.
+			function trackSrc(t) {
+				if (srcMode === 'api' && t && t.split) return '/api/splits/' + t.split + '/audio';
+				return t ? t.src : '';
 			}
 
 			function buildShuffle() {
@@ -1259,7 +1288,7 @@
 				// reload/bookmark reopens the same queue at the same song.
 				pageURL = queuePageURL(queueKey);
 				const t = queue[i];
-				audio.src = t.src;
+				audio.src = trackSrc(t);
 				audio.currentTime = 0;
 				audio.play().catch(() => {});
 				renderAll();
@@ -1376,7 +1405,7 @@
 				if (queueKey === 'shuffle') shuffle = true;
 				if (shuffle) buildShuffle();
 				if (queue.length > 0) {
-					audio.src = queue[index].src;
+					audio.src = trackSrc(queue[index]);
 					audio.currentTime = 0;
 					if (opts.autoplay) audio.play().catch(() => {});
 				}
@@ -1436,6 +1465,12 @@
 			}
 			function toggleMute() { audio.muted = !audio.muted; renderAll(); }
 
+			function setSrcMode(mode) {
+				srcMode = mode === 'api' ? 'api' : 'music';
+				localStorage.setItem(SRC_MODE_KEY, srcMode);
+				renderAll();
+			}
+
 			function fmtSleepRemaining(ms) {
 				const total = Math.max(0, Math.ceil(ms / 1000));
 				const m = Math.floor(total / 60);
@@ -1473,6 +1508,7 @@
 				get isPlaying() { return !audio.paused && !audio.ended; },
 				get shuffle() { return shuffle; },
 				get repeat() { return repeat; },
+				get srcMode() { return srcMode; },
 				get muted() { return audio.muted; },
 				get volume() { return audio.volume; },
 				current() { return current(); },
@@ -1495,6 +1531,8 @@
 				startSleep,
 				stopSleep,
 				rate,
+				setSrcMode,
+				trackSrc,
 			};
 		})();
 
@@ -1623,6 +1661,10 @@
 				'    <button type="button" class="icon-btn" data-player-mute title="Mute">&#128266;&#65039;</button>',
 				'    <input type="range" data-player-volume min="0" max="1" step="0.01">',
 				'  </div>',
+				'  <div class="source-row">',
+				'    <button type="button" class="icon-btn src-toggle" data-player-src-toggle title="Playing from split file &middot; click to play from original recording">&#127925;</button>',
+				'    <span class="src-toggle-label" data-src-toggle-label>Split file</span>',
+				'  </div>',
 				'  <div class="rating-row">',
 				'    <button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>',
 				'    <button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>',
@@ -1735,6 +1777,8 @@
 			const bar = wrap.querySelector('[data-progress-bar]');
 			const toggleBtn = wrap.querySelector('[data-player-toggle]');
 			const shuffleBtn = wrap.querySelector('[data-player-shuffle]');
+			const srcToggleBtn = wrap.querySelector('[data-player-src-toggle]');
+			const srcToggleLabel = wrap.querySelector('[data-src-toggle-label]');
 			const repeatBtn = wrap.querySelector('[data-player-repeat]');
 			const muteBtn = wrap.querySelector('[data-player-mute]');
 			const volInput = wrap.querySelector('[data-player-volume]');
@@ -1762,6 +1806,17 @@
 			if (toggleBtn) toggleBtn.textContent = playing ? '⏸️' : '▶️';
 			if (eq) eq.classList.toggle('playing', playing);
 			if (shuffleBtn) shuffleBtn.classList.toggle('active', Player.shuffle);
+			if (srcToggleBtn) {
+				const api = Player.srcMode === 'api';
+				srcToggleBtn.classList.toggle('active', api);
+				srcToggleBtn.textContent = api ? '🎙️' : '🎵';
+				srcToggleBtn.title = api
+					? 'Playing from original recording · click to play from split file'
+					: 'Playing from split file · click to play from original recording';
+			}
+			if (srcToggleLabel) {
+				srcToggleLabel.textContent = Player.srcMode === 'api' ? 'Original recording' : 'Split file';
+			}
 			if (repeatBtn) {
 				repeatBtn.classList.toggle('active', Player.repeat !== 'off');
 				repeatBtn.textContent = Player.repeat === 'one' ? '🔂' : '🔁';
@@ -2016,6 +2071,7 @@
 			const prevBtn = wrap.querySelector('[data-player-prev]');
 			const nextBtn = wrap.querySelector('[data-player-next]');
 			const shuffleBtn = wrap.querySelector('[data-player-shuffle]');
+			const srcToggleBtn = wrap.querySelector('[data-player-src-toggle]');
 			const repeatBtn = wrap.querySelector('[data-player-repeat]');
 			const muteBtn = wrap.querySelector('[data-player-mute]');
 			const volInput = wrap.querySelector('[data-player-volume]');
@@ -2031,6 +2087,19 @@
 			if (prevBtn) prevBtn.addEventListener('click', () => Player.prev());
 			if (nextBtn) nextBtn.addEventListener('click', () => Player.next());
 			if (shuffleBtn) shuffleBtn.addEventListener('click', () => Player.toggleShuffle());
+			if (srcToggleBtn) srcToggleBtn.addEventListener('click', () => {
+				// Flip the endpoint used for the current track and restart it so
+				// the A/B switch between the split file and a fresh extraction
+				// from the source recording is audible immediately.
+				const mode = Player.srcMode === 'api' ? 'music' : 'api';
+				Player.setSrcMode(mode);
+				const cur = Player.current();
+				if (cur) {
+					Player.audio.src = Player.trackSrc(cur);
+					Player.audio.currentTime = 0;
+					Player.audio.play().catch(() => {});
+				}
+			});
 			if (repeatBtn) repeatBtn.addEventListener('click', () => Player.cycleRepeat());
 			if (muteBtn) muteBtn.addEventListener('click', () => Player.toggleMute());
 			if (volInput) volInput.addEventListener('input', () => Player.setVolume(parseFloat(volInput.value)));

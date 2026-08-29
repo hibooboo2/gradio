@@ -48,6 +48,12 @@ templ PlayerView(data models.PlayerViewData) {
 				<input type="range" data-player-volume min="0" max="1" step="0.01">
 			</div>
 
+			<div class="source-row">
+				<button type="button" class="icon-btn src-toggle" data-player-src-toggle
+					title="Playing from split file &middot; click to play from original recording">&#127925;</button>
+				<span class="src-toggle-label" data-src-toggle-label>Split file</span>
+			</div>
+
 			<div class="rating-row">
 				<button type="button" class="icon-btn" data-player-rate data-rating="like" title="Like this track">&#128077;</button>
 				<button type="button" class="icon-btn" data-player-rate data-rating="dislike" title="Dislike this track">&#128078;</button>
