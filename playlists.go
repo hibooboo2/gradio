@@ -211,7 +211,8 @@ func handleRemoveSong(w http.ResponseWriter, r *http.Request) {
 //
 //   - ?shuffle=1: a global shuffle of every song, least played first; an
 //     optional ?exclude=<id,id,...> skips splits already played this session
-//   - ?radio=<name>: play a queue of random splits from that radio
+//   - ?radio=<name>: play a queue of random splits from that radio (a hashed
+//     recordings dir is accepted and resolved to the display name)
 //   - ?playlist=<id>: play a saved playlist, with optional ?song=<split id>
 //   - no params: the empty state, which lists available radios to start
 func handlePlayerView(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +253,11 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if radio := r.URL.Query().Get("radio"); radio != "" {
+		// Resolve a stale ?radio=<hash> link back to the display name so the
+		// playlist name, subtitle, queue key and split lookup all use the
+		// station name. Plain names pass through unchanged.
+		radio = db.RadioDisplayName(r.Context(), radio)
+
 		splits, err := db.FetchRadioSplits(r.Context(), radio, radioQueueSize)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", radio)

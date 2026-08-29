@@ -42,6 +42,14 @@ func main() {
 
 	db.CreateDBHandle()
 
+	// Rewrite any recordings rows whose radio column still holds a SHA-256 hash
+	// of a station name back to the display name. Runs again after a -sync
+	// re-syncs the stations table below; the hash fallbacks in the DB queries
+	// make the timing non-critical either way.
+	if err := db.RepairHashedRadioNames(context.Background()); err != nil {
+		slog.ErrorContext(context.Background(), "repair hashed radio names", "err", err)
+	}
+
 	play := flag.Bool("play", false, "play audio while recording")
 	record := flag.Bool("record", false, "record radio stations")
 	watch := flag.Bool("watch", false, "watch files for splitts")
@@ -69,6 +77,12 @@ func main() {
 				slog.ErrorContext(ctx, "sync radio stations", "err", err)
 			} else {
 				slog.InfoContext(ctx, "synced radio stations", "count", n)
+			}
+
+			// Belt and suspenders: re-run the repair now that the stations table
+			// is freshly re-synced.
+			if err := db.RepairHashedRadioNames(ctx); err != nil {
+				slog.ErrorContext(ctx, "repair hashed radio names", "err", err)
 			}
 
 			return nil
