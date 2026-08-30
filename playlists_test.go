@@ -222,6 +222,34 @@ func TestRadioPlayback(t *testing.T) {
 	require.Contains(t, playerBody, "data-audio")
 	require.Contains(t, playerBody, "data-player-queue")
 	require.Contains(t, playerBody, "Radio · RadioA")
+	// Without ?play=1 the queue loads paused: no autoplay flag.
+	require.NotContains(t, playerBody, "data-autoplay")
+
+	// ?song=<id> starts playback at that song with the station's full ordered
+	// library: both RadioA splits appear in the queue.
+	allSplits, err := db.FetchAllRadioSplits(t.Context(), "RadioA")
+	require.NoError(t, err)
+	require.Len(t, allSplits, 2)
+	req = httptest.NewRequest(http.MethodGet, "/player/view?radio=RadioA&song="+strconv.FormatInt(allSplits[0].ID, 10), nil)
+	req.SetBasicAuth(testUsername, testPassword)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	songBody := rec.Body.String()
+	require.Contains(t, songBody, "data-audio")
+	require.Contains(t, songBody, "data-player-queue")
+	require.Contains(t, songBody, "Radio · RadioA")
+	require.Contains(t, songBody, "data-start-split")
+	require.Contains(t, songBody, `data-split="`+strconv.FormatInt(allSplits[0].ID, 10)+`"`)
+	require.Contains(t, songBody, `data-split="`+strconv.FormatInt(allSplits[1].ID, 10)+`"`)
+
+	// ?play=1 requests immediate playback: the fragment carries data-autoplay.
+	req = httptest.NewRequest(http.MethodGet, "/player/view?radio=RadioA&play=1", nil)
+	req.SetBasicAuth(testUsername, testPassword)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "data-autoplay")
 
 	// JSON endpoint lists radios.
 	req = httptest.NewRequest(http.MethodGet, "/api/radios", nil)

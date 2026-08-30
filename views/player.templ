@@ -11,7 +11,10 @@ import (
 templ PlayerView(data models.PlayerViewData) {
 	<div class="player-wrap" data-player-wrap
 		data-queue-key={ data.QueueKey }
-		data-start-split={ data.StartSong }>
+		data-start-split={ data.StartSong }
+		if data.Autoplay {
+			data-autoplay
+		}>
 		<section class="surface player-card">
 			<div class="player-cover" data-eq>
 				<span></span><span></span><span></span>

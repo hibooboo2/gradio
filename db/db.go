@@ -845,6 +845,43 @@ func FetchRadioSplits(ctx context.Context, radio string, limit int) ([]models.Sp
 	return splits, rows.Err()
 }
 
+// FetchAllRadioSplits returns every split belonging to the given radio,
+// newest recording first with each recording's songs in stream order, so the
+// station's full library can be browsed (or played) as one ordered queue. The
+// match covers both the display name and its SHA-256 hash, like
+// FetchRadioSplits.
+func FetchAllRadioSplits(ctx context.Context, radio string) ([]models.Split, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("nil db")
+	}
+
+	rows, err := DB.Query(ctx,
+		`SELECT s.id, s.recording_id, s.source_path, s.position, s.start_seconds, s.end_seconds, s.output_path, s.classification, s.custom_title,
+		        COALESCE(sp.plays, 0), COALESCE(sp.rating, 0)
+		 FROM splits s
+		 JOIN recordings r ON r.id = s.recording_id
+		 LEFT JOIN song_plays sp ON sp.split_id = s.id
+		 WHERE (r.radio = $1 OR r.radio = $2)
+		 ORDER BY r.created_at DESC, s.position ASC`,
+		radio, RadioHash(radio),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var splits []models.Split
+	for rows.Next() {
+		var s models.Split
+		if err := rows.Scan(&s.ID, &s.RecordingID, &s.SourcePath, &s.Index, &s.Start, &s.End, &s.OutputPath, &s.Classification, &s.CustomTitle, &s.Plays, &s.Rating); err != nil {
+			return nil, err
+		}
+		splits = append(splits, s)
+	}
+
+	return splits, rows.Err()
+}
+
 // FetchGlobalShuffleBatch returns up to limit splits for the global shuffle,
 // ordered least-listened first (fewest plays) with a random tiebreak so
 // repeated shuffles keep surfacing music the user has not heard yet. Splits

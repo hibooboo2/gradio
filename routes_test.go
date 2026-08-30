@@ -41,6 +41,75 @@ func TestPageURLsServeShell(t *testing.T) {
 	}
 }
 
+// TestRecordedView covers the Recorded Music tab: the page shell, the fragment
+// listing every radio with recorded music, and expanding one station's full
+// ordered library.
+func TestRecordedView(t *testing.T) {
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	admin.Close()
+
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
+
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
+
+	// Two radios, each with a couple of splits.
+	for _, radio := range []string{"RadioA", "RadioB"} {
+		recID, err := db.InsertRecording(t.Context(), "/tmp/recorded-"+radio+".mp3", radio, time.Now(), 123)
+		require.NoError(t, err)
+		require.NoError(t, db.InsertSplit(t.Context(), models.Split{
+			RecordingID: recID, SourcePath: "/tmp/recorded-" + radio + ".mp3",
+			Index: 0, Start: 0, End: 100,
+			OutputPath: "split_music/" + radio + "/recorded/output_00000.mp3",
+		}))
+		require.NoError(t, db.InsertSplit(t.Context(), models.Split{
+			RecordingID: recID, SourcePath: "/tmp/recorded-" + radio + ".mp3",
+			Index: 1, Start: 100, End: 200,
+			OutputPath: "split_music/" + radio + "/recorded/output_00001.mp3",
+		}))
+	}
+
+	radioASplits, err := db.FetchAllRadioSplits(t.Context(), "RadioA")
+	require.NoError(t, err)
+	require.Len(t, radioASplits, 2)
+
+	mux := routes()
+
+	// The page URL serves the htmx app shell.
+	req := httptest.NewRequest(http.MethodGet, "/recorded", nil)
+	req.SetBasicAuth(testUsername, testPassword)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// The fragment lists every radio that has recorded music.
+	req = httptest.NewRequest(http.MethodGet, "/recorded/view", nil)
+	req.SetBasicAuth(testUsername, testPassword)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "RadioA")
+	require.Contains(t, body, "RadioB")
+
+	// Expanding RadioA shows both its splits inline while RadioB stays listed.
+	req = httptest.NewRequest(http.MethodGet, "/recorded/view?radio=RadioA", nil)
+	req.SetBasicAuth(testUsername, testPassword)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = rec.Body.String()
+	require.Contains(t, body, `data-split="`+strconv.FormatInt(radioASplits[0].ID, 10)+`"`)
+	require.Contains(t, body, `data-split="`+strconv.FormatInt(radioASplits[1].ID, 10)+`"`)
+	require.Contains(t, body, "RadioB")
+	require.Contains(t, body, "play=1")
+}
+
 func TestRoutes(t *testing.T) {
 	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
 	require.NoError(t, err)

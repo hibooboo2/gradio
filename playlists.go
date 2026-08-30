@@ -212,7 +212,9 @@ func handleRemoveSong(w http.ResponseWriter, r *http.Request) {
 //   - ?shuffle=1: a global shuffle of every song, least played first; an
 //     optional ?exclude=<id,id,...> skips splits already played this session
 //   - ?radio=<name>: play a queue of random splits from that radio (a hashed
-//     recordings dir is accepted and resolved to the display name)
+//     recordings dir is accepted and resolved to the display name); ?song=<id>
+//     starts playback at that song with the station's full ordered library;
+//     ?play=1 starts playback immediately when the queue loads
 //   - ?playlist=<id>: play a saved playlist, with optional ?song=<split id>
 //   - no params: the empty state, which lists available radios to start
 func handlePlayerView(w http.ResponseWriter, r *http.Request) {
@@ -252,13 +254,33 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?play=1 requests immediate playback when the queue loads. Only the
+	// branches that render a concrete queue honor it; the shuffle branch
+	// already autoplays via its queue key.
+	play := r.URL.Query().Get("play") == "1"
+
 	if radio := r.URL.Query().Get("radio"); radio != "" {
 		// Resolve a stale ?radio=<hash> link back to the display name so the
 		// playlist name, subtitle, queue key and split lookup all use the
 		// station name. Plain names pass through unchanged.
 		radio = db.RadioDisplayName(r.Context(), radio)
 
-		splits, err := db.FetchRadioSplits(r.Context(), radio, radioQueueSize)
+		// ?song=<id> starts playback at that song with the station's full
+		// ordered library; without it the radio plays a random shuffled queue.
+		var startID int64
+		if v := r.URL.Query().Get("song"); v != "" {
+			if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+				startID = id
+			}
+		}
+
+		var splits []models.Split
+		var err error
+		if startID != 0 {
+			splits, err = db.FetchAllRadioSplits(r.Context(), radio)
+		} else {
+			splits, err = db.FetchRadioSplits(r.Context(), radio, radioQueueSize)
+		}
 		if err != nil {
 			slog.ErrorContext(r.Context(), "load radio splits", "err", err, "radio", radio)
 			http.Error(w, "failed to load radio", http.StatusInternalServerError)
@@ -276,10 +298,12 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := views.PlayerView(models.PlayerViewData{
-			Playlist: models.Playlist{Name: radio},
-			Songs:    songs,
-			Subtitle: "Radio · " + radio,
-			QueueKey: "radio:" + radio,
+			Playlist:  models.Playlist{Name: radio},
+			Songs:     songs,
+			StartSong: startID,
+			Autoplay:  play,
+			Subtitle:  "Radio · " + radio,
+			QueueKey:  "radio:" + radio,
 		}).Render(r.Context(), w); err != nil {
 			slog.ErrorContext(r.Context(), "render player view", "err", err)
 		}
@@ -336,6 +360,7 @@ func handlePlayerView(w http.ResponseWriter, r *http.Request) {
 		Playlist:  playlist,
 		Songs:     songs,
 		StartSong: startSplit,
+		Autoplay:  play,
 		QueueKey:  "playlist:" + strconv.FormatInt(playlistID, 10),
 	}).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render player view", "err", err)

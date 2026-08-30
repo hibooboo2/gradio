@@ -55,6 +55,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /favorites             favorite stations view
 //	GET    /history               play history view
 //	GET    /active                active recordings view
+//	GET    /recorded              recorded music view
 //	GET    /settings              settings view
 //
 // JSON API backed directly by the cockroach tables:
@@ -96,6 +97,7 @@ func serveAPI(ctx context.Context, addr string) error {
 //	GET    /player/view            player tab fragment (?shuffle=1, ?playlist=.. or ?radio=..)
 //	GET    /history/view           play history tab fragment (?sort=.., ?group=radio, ?limit=N)
 //	GET    /active/view            active recordings tab fragment
+//	GET    /recorded/view          recorded music tab fragment (?radio=<name> expands a station)
 //	GET    /settings/view          settings tab fragment
 //	POST   /playlists/create       create a playlist (form: name)
 //	POST   /playlists/{id}/delete  delete a playlist
@@ -113,6 +115,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /favorites", serveIndex)
 	mux.HandleFunc("GET /history", serveIndex)
 	mux.HandleFunc("GET /active", serveIndex)
+	mux.HandleFunc("GET /recorded", serveIndex)
 	mux.HandleFunc("GET /settings", serveIndex)
 
 	// JSON API backed directly by the cockroach tables.
@@ -159,6 +162,7 @@ func routes() http.Handler {
 	mux.HandleFunc("GET /favorites/view", handleFavoritesView)
 	mux.HandleFunc("GET /history/view", handleHistoryView)
 	mux.HandleFunc("GET /active/view", handleActiveView)
+	mux.HandleFunc("GET /recorded/view", handleRecordedView)
 	mux.HandleFunc("GET /settings/view", handleSettingsView)
 	mux.HandleFunc("POST /stations/{uuid}/record", handleStationRecord)
 	mux.HandleFunc("POST /stations/{uuid}/favorite", handleToggleFavorite)
@@ -368,7 +372,10 @@ func handleResplitSplit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	original, a, b, err := resplitSplit(r.Context(), id, *req.Cut)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*40)
+	defer cancel()
+
+	original, a, b, err := resplitSplit(ctx, id, *req.Cut)
 	if err != nil {
 		if errors.Is(err, errCutOutsideSplit) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -500,6 +507,9 @@ func handleSplitAudio(w http.ResponseWriter, r *http.Request) {
 	)
 	cmd.Stdout = w
 	cmd.Stderr = os.Stderr
+
+	slog.InfoContext(r.Context(), "Running ffmpeg to get file from source recording")
+
 	if err := cmd.Run(); err != nil {
 		// The 200 and Content-Type are already sent, so the client saw a
 		// truncated body; log for diagnosis.
@@ -548,5 +558,56 @@ func handleSplitsView(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := views.SplitsView(groups).Render(r.Context(), w); err != nil {
 		slog.ErrorContext(r.Context(), "render splits view", "err", err)
+	}
+}
+
+// handleRecordedView renders the recorded music tab fragment: every radio
+// that has recorded music, with an optional ?radio=<name> expanding that
+// station's full ordered library inline.
+func handleRecordedView(w http.ResponseWriter, r *http.Request) {
+	radios, err := db.FetchRadios(r.Context())
+	if err != nil {
+		slog.ErrorContext(r.Context(), "list radios view", "err", err)
+		http.Error(w, "failed to load radios", http.StatusInternalServerError)
+		return
+	}
+
+	expanded := r.URL.Query().Get("radio")
+	if expanded != "" {
+		expanded = db.RadioDisplayName(r.Context(), expanded)
+	}
+
+	// Build one group per radio, preserving the order from FetchRadios and
+	// assigning colors exactly like handleSplitsView.
+	groups := make([]models.RadioGroup, 0, len(radios))
+	for i, radio := range radios {
+		group := models.RadioGroup{
+			Radio: radio.Name,
+			Color: radioPalette[i%len(radioPalette)],
+		}
+		if radio.Name == expanded {
+			splits, err := db.FetchAllRadioSplits(r.Context(), radio.Name)
+			if err != nil {
+				slog.ErrorContext(r.Context(), "load recorded splits", "err", err, "radio", radio.Name)
+				http.Error(w, "failed to load recorded music", http.StatusInternalServerError)
+				return
+			}
+			group.Splits = splits
+		}
+		groups = append(groups, group)
+	}
+
+	total := 0
+	for _, radio := range radios {
+		total += radio.SplitCount
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := views.RecordedView(models.RecordedViewData{
+		Groups:     groups,
+		Expanded:   expanded,
+		TotalSongs: total,
+	}).Render(r.Context(), w); err != nil {
+		slog.ErrorContext(r.Context(), "render recorded view", "err", err)
 	}
 }

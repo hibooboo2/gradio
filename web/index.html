@@ -779,6 +779,28 @@
 		.station-record:disabled { background: var(--panel-2); color: var(--muted); cursor: default; opacity: 1; }
 		.station-status { color: var(--accent-2); font-size: 0.8rem; margin-left: 0.5rem; }
 
+		/* ---------- Recorded Music tab ---------- */
+		.recorded-list { display: flex; flex-direction: column; gap: 0.75rem; }
+		.recorded-station { padding: 0; overflow: hidden; }
+		.recorded-head {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			padding: 0.9rem 1.1rem;
+			cursor: pointer;
+			user-select: none;
+			transition: background 0.15s ease;
+		}
+		.recorded-head:hover { background: rgba(99, 102, 241, 0.08); }
+		.recorded-head .radio-badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.recorded-actions { margin-left: auto; display: flex; align-items: center; flex-shrink: 0; }
+		.recorded-play { padding: 0.3rem 0.85rem; font-size: 0.85rem; }
+		.recorded-chevron { color: var(--muted); font-size: 0.7rem; flex-shrink: 0; }
+		.recorded-detail { border-top: 1px solid var(--border); padding: 1rem 1.1rem; }
+		@media (max-width: 600px) {
+			.recorded-head { flex-wrap: wrap; row-gap: 0.4rem; }
+		}
+
 		/* ---------- Active Recordings tab ---------- */
 		.active-table td:last-child { font-family: inherit; }
 		.rec-indicator {
@@ -1030,6 +1052,9 @@
 			<button class="tab" data-tab="stations" data-title="Radio Stations" data-subtitle="Record and play live stations" data-controls="false"
 				hx-get="/stations/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/stations"
 				hx-on:click="selectTab('stations')">Radio Stations</button>
+			<button class="tab" data-tab="recorded" data-title="Recorded Music" data-subtitle="Songs recorded from your stations" data-controls="false"
+				hx-get="/recorded/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/recorded"
+				hx-on:click="selectTab('recorded')">Recorded Music</button>
 			<button class="tab" data-tab="active" data-title="Active Recordings" data-subtitle="Stations recording right now" data-controls="false"
 				hx-get="/active/view" hx-target="#content" hx-swap="innerHTML" hx-push-url="/active"
 				hx-on:click="selectTab('active')">● Active</button>
@@ -1129,6 +1154,9 @@
 			} else if (path.startsWith('/stations')) {
 				tab = 'stations';
 				frag = '/stations/view';
+			} else if (path.startsWith('/recorded')) {
+				tab = 'recorded';
+				frag = '/recorded/view' + window.location.search;
 			} else if (path.startsWith('/favorites')) {
 				tab = 'favorites';
 				frag = '/favorites/view';
@@ -1725,6 +1753,7 @@
 
 			const queueKey = wrap.getAttribute('data-queue-key') || '';
 			const startSplit = wrap.getAttribute('data-start-split') || '';
+			const autoplay = wrap.hasAttribute('data-autoplay');
 			const tracks = [...wrap.querySelectorAll('[data-player-track]')].map(li => ({
 				src: li.getAttribute('data-src'),
 				title: li.getAttribute('data-title'),
@@ -1763,7 +1792,7 @@
 				startIndex: startIndex >= 0 ? startIndex : 0,
 				source: (wrap.querySelector('[data-player-subtitle]') || {}).textContent || '',
 				freshShuffle: queueKey === 'shuffle',
-				autoplay: queueKey === 'shuffle',
+				autoplay: autoplay || queueKey === 'shuffle',
 			});
 		}
 

@@ -40,6 +40,19 @@ type RadioGroup struct {
 	Splits []Split
 }
 
+// RecordedViewData is the data model for the Recorded Music tab fragment: the
+// radios that have recorded music, with the expanded radio's songs populated.
+type RecordedViewData struct {
+	// Groups lists every radio that has recorded music. Only the expanded
+	// radio carries its Splits; the others have an empty slice.
+	Groups []RadioGroup
+	// Expanded is the radio name whose songs are shown inline, or "" when
+	// none is expanded.
+	Expanded string
+	// TotalSongs is the total number of recorded songs across all radios.
+	TotalSongs int
+}
+
 // RadioPalette assigns a stable color to each distinct radio.
 var RadioPalette = []string{
 	"#6366f1", // indigo

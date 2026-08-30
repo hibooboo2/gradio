@@ -18,6 +18,8 @@ type PlayerViewData struct {
 	Playlist  Playlist
 	Songs     []PlaylistSong
 	StartSong int64
+	// Autoplay requests that playback start immediately when the queue loads.
+	Autoplay bool
 	// Subtitle overrides the default "Playlist · <name>" subtitle, e.g. for a
 	// radio which shows "Radio · <name>".
 	Subtitle string

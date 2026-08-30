@@ -1,0 +1,78 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/hibooboo2/gradio/models"
+)
+
+// RecordedView renders the Recorded Music tab fragment: one expandable card
+// per radio that has recorded songs. Only the expanded radio carries its
+// Splits (the handler fills them in); the others show a badge and a Play
+// button so a station can be queued without expanding it first.
+templ RecordedView(data models.RecordedViewData) {
+	<div class="view-header">
+		<h2>Recorded Music</h2>
+		<p>{ data.TotalSongs } { Plural(data.TotalSongs, "song") } recorded from { len(data.Groups) } { Plural(len(data.Groups), "station") } &mdash; click a station to browse its songs.</p>
+	</div>
+
+	if len(data.Groups) == 0 {
+		<p class="empty">No recorded music yet. Record a station from the Radio Stations tab and its songs will appear here.</p>
+	} else {
+		<div class="recorded-list">
+			for _, g := range data.Groups {
+				<section class="surface recorded-station">
+					<div class="recorded-head" hx-target="#content" hx-swap="innerHTML"
+						if g.Radio == data.Expanded {
+							hx-get="/recorded/view"
+							hx-push-url="/recorded"
+						} else {
+							hx-get={ fmt.Sprintf("/recorded/view?radio=%s", URLQ(g.Radio)) }
+							hx-push-url={ fmt.Sprintf("/recorded?radio=%s", URLQ(g.Radio)) }
+						}>
+						<span class="radio-badge" style={ "background:" + g.Color }>{ g.Radio }</span>
+						if g.Radio == data.Expanded {
+							<span class="count">{ len(g.Splits) } { Plural(len(g.Splits), "song") }</span>
+						}
+						<span class="recorded-actions">
+							<button class="btn-play recorded-play"
+								hx-get={ fmt.Sprintf("/player/view?radio=%s&play=1", URLQ(g.Radio)) } hx-target="#content" hx-swap="innerHTML"
+								hx-push-url={ fmt.Sprintf("/player?radio=%s&play=1", URLQ(g.Radio)) } hx-on:click="selectTab('player')">&#9654; Play</button>
+						</span>
+						<span class="recorded-chevron">
+							if g.Radio == data.Expanded {
+								&#9660;
+							} else {
+								&#9654;
+							}
+						</span>
+					</div>
+
+					if g.Radio == data.Expanded {
+						<div class="recorded-detail">
+							if len(g.Splits) > 0 {
+								<ul class="song-list">
+									for _, s := range g.Splits {
+										<li data-split={ s.ID }>
+<a class="song-play" href={ fmt.Sprintf("/player?radio=%s&song=%d&play=1", URLQ(g.Radio), s.ID) }
+											title="Play"
+											hx-get={ fmt.Sprintf("/player/view?radio=%s&song=%d&play=1", URLQ(g.Radio), s.ID) }
+											hx-target="#content" hx-swap="innerHTML" hx-push-url={ fmt.Sprintf("/player?radio=%s&song=%d&play=1", URLQ(g.Radio), s.ID) }
+											hx-on:click="selectTab('player', false)">&#9654;</a>
+											<div class="song-info">
+												<span class="song-title">{ SongTitle(s) }</span>
+												<span class="song-sub">{ TimeStr(s.Start) } &ndash; { TimeStr(s.End) } &middot; { ClsLabel(s.Classification) }</span>
+											</div>
+										</li>
+									}
+								</ul>
+							} else {
+								<p class="empty">No songs recorded from this station yet.</p>
+							}
+						</div>
+					}
+				</section>
+			}
+		</div>
+	}
+}
