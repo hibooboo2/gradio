@@ -882,11 +882,21 @@ func FetchAllRadioSplits(ctx context.Context, radio string) ([]models.Split, err
 	return splits, rows.Err()
 }
 
+// minShuffleDuration and maxShuffleDuration bound the splits served by the
+// global shuffle: only clips longer than 1m30s and shorter than 6m30s are
+// eligible, so short clips and long shows stay out of Shuffle All Music.
+const (
+	minShuffleDuration = 90  // 1m30s
+	maxShuffleDuration = 390 // 6m30s
+)
+
 // FetchGlobalShuffleBatch returns up to limit splits for the global shuffle,
 // ordered least-listened first (fewest plays) with a random tiebreak so
 // repeated shuffles keep surfacing music the user has not heard yet. Splits
 // marked as commercials or re_split are skipped, as are any splits whose ids
-// appear in exclude (already played in the current shuffle session).
+// appear in exclude (already played in the current shuffle session). Only
+// splits longer than minShuffleDuration and shorter than maxShuffleDuration
+// are returned.
 func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([]models.Split, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("nil db")
@@ -912,9 +922,12 @@ func FetchGlobalShuffleBatch(ctx context.Context, limit int, exclude []int64) ([
 		 FROM splits s
 		 LEFT JOIN song_plays sp ON sp.split_id = s.id
 		 WHERE s.classification != $1 AND s.classification != $2 AND s.id != ALL($3::INT[])
+		   AND s.end_seconds - s.start_seconds > $5
+		   AND s.end_seconds - s.start_seconds < $6
 		 ORDER BY COALESCE(sp.plays, 0) ASC, random()
 		 LIMIT $4`,
 		models.ClassificationCommercial, models.ClassificationReSplit, excludeArg, limit,
+		minShuffleDuration, maxShuffleDuration,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch shuffle: %w", err)

@@ -235,6 +235,45 @@ func TestSongPlaysAndGlobalShuffle(t *testing.T) {
 	}
 }
 
+// TestGlobalShuffleDurationFilter ensures the global shuffle only serves
+// splits longer than 1m30s and shorter than 6m30s, so short clips and long
+// shows never enter Shuffle All Music.
+func TestGlobalShuffleDurationFilter(t *testing.T) {
+	admin, err := pgxpool.New(t.Context(), "postgres://root@localhost:26257/defaultdb?sslmode=disable")
+	require.NoError(t, err)
+	_, err = admin.Exec(t.Context(), `CREATE DATABASE IF NOT EXISTS gradio_test`)
+	require.NoError(t, err)
+	admin.Close()
+
+	db.SetRecordDBPath(testDBPath)
+	db.CreateDBHandle()
+
+	_, err = db.DB.Exec(t.Context(), `DROP TABLE IF EXISTS song_plays; DROP TABLE IF EXISTS playlist_splits; DROP TABLE IF EXISTS playlists; DROP TABLE IF EXISTS play_history; DROP TABLE IF EXISTS splits; DROP TABLE IF EXISTS recording_splits; DROP TABLE IF EXISTS recordings;`)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateSchema(t.Context(), db.DB))
+
+	recID, err := db.InsertRecording(t.Context(), "/tmp/shuffle-duration.mp3", "TestRadio", time.Now(), 123)
+	require.NoError(t, err)
+
+	// One split below the floor, one inside the range, one above the ceiling.
+	for i, dur := range []float64{30, 100, 500} {
+		s := models.Split{
+			RecordingID: recID,
+			SourcePath:  "/tmp/shuffle-duration.mp3",
+			Index:       i,
+			Start:       0,
+			End:         dur,
+			OutputPath:  fmt.Sprintf("split_music/TestRadio/sd/output_%05d.mp3", i),
+		}
+		require.NoError(t, db.InsertSplit(t.Context(), s))
+	}
+
+	batch, err := db.FetchGlobalShuffleBatch(t.Context(), 100, nil)
+	require.NoError(t, err)
+	require.Len(t, batch, 1, "only the split inside the duration range must be served")
+	require.InDelta(t, 100, batch[0].Duration(), 0.0001)
+}
+
 // TestRadioStationDB covers the radio_stations table: bulk upsert, idempotent
 // re-sync, and the name -> url_resolved lookup map.
 func TestRadioStationDB(t *testing.T) {
